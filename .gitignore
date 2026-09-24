@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 变体二分的工作目录（bisect_taint.py 默认落在 <tree>/_bisect）
+_bisect/
+*.sarif.out
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

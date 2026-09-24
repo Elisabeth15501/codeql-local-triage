@@ -1,0 +1,38 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 零依赖：用仓库内的实测 SARIF fixture 做断言，不需要安装 CodeQL
+      - name: Run self-test
+        run: python tests/run_tests.py
+
+      - name: Prefilter on fixtures (expect 1 hit then clean)
+        run: |
+          set +e
+          python scripts/scan_sensitive_sources.py tests/fixtures/repro/scan.py --quiet
+          hit=$?
+          python scripts/scan_sensitive_sources.py tests/fixtures/repro_fixed/scan.py --quiet
+          clean=$?
+          set -e
+          echo "repro=$hit (expect 1)  repro_fixed=$clean (expect 0)"
+          [ "$hit" = "1" ] && [ "$clean" = "0" ]
+
+      - name: SARIF assertions
+        run: |
+          python scripts/read_sarif.py tests/fixtures/sarif/repro.sarif --expect 1
+          python scripts/read_sarif.py tests/fixtures/sarif/repro_fixed.sarif --expect 0
