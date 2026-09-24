@@ -1,10 +1,27 @@
-# ClawHub package exclusions
-# ClawHub enforces MIT-0 site-wide; a per-skill LICENSE file reads as a conflicting
-# license term, so it must be excluded from the published package.
-# NOTICE is kept: it is third-party attribution, not a license override (MIT-0 compatible).
+# ClawHub package exclusions / ClawHub 打包排除项
+#
+# ClawHub enforces MIT-0 site-wide; a per-skill LICENSE file reads as a *conflicting*
+# license term, so it MUST be excluded. NOTICE is kept — it is third-party attribution,
+# not a license override (MIT-0 compatible).
+# ClawHub 全站强制 MIT-0；单技能自带的 LICENSE 会被判为冲突许可条款，必须排除。
+# NOTICE 保留——它是第三方署名，不算许可覆盖（与 MIT-0 兼容）。
+
+# --- License (conflicting term under MIT-0) / 许可（MIT-0 下属冲突条款）---
 LICENSE
 
-# Build / cache noise
+# --- Git metadata — not part of the skill runtime / Git 元数据，非技能运行所需 ---
+.gitattributes
+.gitignore
+.github/
+
+# --- Build / cache noise / 构建与缓存噪声 ---
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# --- Generated test output (produced at run time, not a checked-in fixture) /
+#     运行期生成的测试产物（非入库 fixture）---
+_bisect/
+
+# --- This ignore file itself / 忽略文件自身 ---
+.clawhubignore

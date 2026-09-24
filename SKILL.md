@@ -85,6 +85,14 @@ source → sink 路径完整复现出来，并回答「为什么报、改哪一�
 
 换言之，**核心判定不依赖一次海外大体积下载**；CLI 只是把「可复现因果结论」从两步推进到第三步的增强项。
 
+## 相关技能与取舍 / Related skills & tradeoffs
+
+**跨技能分工 / Division of labour.** 本技能只做**本地因果定位**。如果你要**在 GitHub 上直接管理告警本身**（列出、改状态、批量处理 Code Scanning 告警），交给 GitHub 官方的告警管理能力（如 `github-security-codescanning-alerts-skill` 或 `gh api code-scanning`）；本技能负责在推送前把「为什么报、改哪行消失」查清楚——二者互补而非竞争。
+This skill does **local causal triage** only. To *manage* alerts on GitHub (list / change state / bulk-handle Code Scanning alerts), use GitHub's official alert-management capability (e.g. `github-security-codescanning-alerts-skill` or `gh api code-scanning`); the two are complementary, not competing.
+
+**「无 LLM 判读」是取舍，不是缺失 / "No LLM judgment" is a tradeoff, not a gap.** 结论来自**可复现的对照实验**（变体二分 + 实测数据流），而非模型主观判断——这让结果可审计、可复核。若你确实需要**语义层判读 / 告警优先级排序**这类 LLM 能力，去看 `li-codeql-llm` 之类的技能；本技能**刻意不做**那一层。
+Conclusions come from a **reproducible controlled experiment**, not model intuition — which keeps them auditable. If you specifically need *semantic triage / prioritisation* (LLM-based), look at skills like `li-codeql-llm`; this skill deliberately stops at the mechanical layer.
+
 ## 0. When to use / 何时用
 
 - An alert "makes no sense" or "still fires after I fixed it"
@@ -112,48 +120,13 @@ run without CodeQL.
 
 ## 2. Installing the CodeQL CLI / 安装 CodeQL CLI
 
-One-off, ~400 MB. The zip contains **extractors only**; query packs are pulled during
-`database analyze`.
-
-一次性，下载 ~400MB。该 zip **只含提取器**，查询包在 `database analyze` 时自动拉，不用单独下。
-
-```bash
-gh release download v2.27.1 --repo github/codeql-cli-binaries --pattern "codeql-win64.zip"
-python -c "import zipfile; zipfile.ZipFile('codeql-win64.zip').extractall('.')"
-./codeql/codeql version          # expect 2.27.1 / 应打印 2.27.1
-```
-
-- Patterns: `codeql-win64.zip` / `codeql-linux64.zip` / `codeql-osx64.zip` / `codeql-osx-arm64.zip`
-  对应平台：Windows x64 / Linux x64 / macOS Intel / Apple silicon
-- Validate first with `zipfile.ZipFile(...).testzip()`; Python's `zipfile` is more reliable than `unzip`
-  先 `testzip()` 校验；用 Python `zipfile` 比 `unzip` 稳
-- Latest version: `gh api repos/github/codeql-cli-binaries/releases/latest --jq .tag_name`
-  查最新版本用这条命令
-- In practice the download is slow (~15 min) — run it in the background
-  实测下载很慢（约 15 分钟），放后台跑
+一次性下载 ~400 MB（只含提取器，查询包首次 `analyze` 时自动拉）。平台包名、校验与最新版本查询的**完整步骤见 `references/running-codeql-cli.md`**。CodeQL CLI 是可选依赖——预筛与读 SARIF 不需要它。
+One-off ~400 MB download (extractors only; query packs auto-pull on first `analyze`). Full steps, platform zips, validation and "latest version" lookup: **`references/running-codeql-cli.md`**. The CLI is optional — the prefilter and SARIF reader do not need it.
 
 ## 3. Build a database + run a single query / 建库 + 跑单条查询
 
-**Run only the rule you care about** — never the whole suite (`python-code-scanning.qls` takes tens of
-minutes).
-
-**只跑目标那一条**，别跑整个 suite（`python-code-scanning.qls` 要几十分钟）。
-
-```bash
-codeql database create  "$T/db" --language=python --source-root="$SRC" --overwrite --threads=0
-codeql database analyze "$T/db" --download --format=sarif-latest \
-    --output="$T/out.sarif" --threads=0 \
-    "codeql/python-queries:Security/CWE-312/CleartextStorage.ql"
-```
-
-- `--download` installs `codeql/python-queries` into `~/.codeql/packages` on first use
-  首次会装 `codeql/python-queries` 到 `~/.codeql/packages`
-- Measured cost: single-file DB ~70 s; a whole mid-sized Python repo ~9 min (TRAP import dominates);
-  single-query evaluation ~30 s
-  耗时实测：单文件建库 ~70s；整仓建库 ~9 分钟（TRAP import 占大头）；单查询求值 ~30s
-- Query path syntax is `<pack>:<path inside pack>`. Find paths with GitHub search:
-  查询路径规则 `<pack>:<pack 内相对路径>`。找路径用 GitHub 搜索：
-  `gh api "search/code?q=repo:github/codeql+<rule-id>+in:file" --jq '.items[].path'`
+`codeql database create` + `codeql database analyze` 的**精确命令、耗时实测与查询路径语法见 `references/running-codeql-cli.md`**。只跑目标那一条规则，别跑整个 suite。
+`codeql database create` + `codeql database analyze`: **exact commands, measured cost, and query-path syntax in `references/running-codeql-cli.md`**. Run only the one rule you care about, never the whole suite.
 
 ## 4. Read `codeFlows` from the SARIF (the key step) / 读 SARIF 的 codeFlows（关键一步）
 

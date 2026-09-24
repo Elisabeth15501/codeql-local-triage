@@ -315,6 +315,36 @@ triggers an error-level alert.
 
 `tests/fixtures/repro/` 是一个 **25 行、不含任何凭据**的最小复现，同样触发 error 级告警。
 
+## CI 门禁示例 / CI gate example
+
+把「预筛 + 读 SARIF」直接接进 CI：预筛命中候选源时退出码为 `1`（构建即失败），读 SARIF 用 `--expect 0` 做断言。两条都**零依赖**，可在没装 CodeQL CLI 的 runner 上跑。
+Wire the prefilter + SARIF reader straight into CI: the prefilter exits `1` when it finds candidate sources (failing the build), and `read_sarif.py --expect 0` asserts a clean result. Both are **zero-dependency** and run on a runner without the CodeQL CLI.
+
+```yaml
+# .github/workflows/triage-gate.yml
+name: codeql-local-triage gate
+on: [push, pull_request]
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      # 1) zero-dependency prefilter: fails the build if candidate sources appear
+      #    零依赖预筛：出现候选源即让构建失败
+      - run: python scripts/scan_sensitive_sources.py path/to/file.py
+      # 2) if you already have a SARIF from CodeQL, assert zero results
+      #    若已有 CodeQL 产出的 SARIF，断言清零
+      - run: python scripts/read_sarif.py results.sarif --expect 0
+```
+
+> 两点提醒 / Two notes:
+> - 预筛只用名字启发式做**预验**，不是最终判定；真要关单仍以 GitHub 自己的 CodeQL 扫描为准。
+>   The prefilter is a **pre-check** by name heuristic, not the final verdict; closing an alert still defers to GitHub's own CodeQL scan.
+> - 这两条都**零依赖**，可在没装 CodeQL CLI 的 runner 上直接跑。
+>   Both steps are **zero-dependency** and run on a runner without the CodeQL CLI installed.
+
 ## Directory layout / 目录结构
 
 ```text
