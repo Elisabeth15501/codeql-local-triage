@@ -1,3 +1,5 @@
-# 统一以 LF 入库：本仓库有「逐字节比较两份 fixture」的断言，
-# 以及跨平台读取的 SARIF fixture，统一行尾可避免 diff 噪音与误判。
+# Normalize to LF in the repository: this repo has a "byte-identical fixtures" assertion and
+# cross-platform SARIF fixtures, so consistent line endings avoid diff noise and false failures.
+# 统一以 LF 入库：本仓库有「逐字节比较两份 fixture」的断言，以及跨平台读取的 SARIF fixture，
+# 统一行尾可避免 diff 噪音与误判。
 * text=auto eol=lf

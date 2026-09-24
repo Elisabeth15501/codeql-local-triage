@@ -17,6 +17,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Zero dependencies: assert against the measured SARIF fixtures in the repo, no CodeQL needed
       # 零依赖：用仓库内的实测 SARIF fixture 做断言，不需要安装 CodeQL
       - name: Run self-test
         run: python tests/run_tests.py

@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""读 CodeQL 的 SARIF，把告警的 **source -> ... -> sink 完整路径** 打出来。
+"""Read a CodeQL SARIF file and print the **source -> ... -> sink** path of every alert.
 
-为什么需要它
-------------
+读 CodeQL 的 SARIF，把告警的 **source -> ... -> sink 完整路径** 打出来。
+
+Why you need it / 为什么需要它
+------------------------------
+GitHub's alert page **gives you no data flow** — it shows the sink line and nothing about where the
+taint came from. The output of ``codeql database analyze --format=sarif-latest`` contains
+``runs[].results[].codeFlows[].threadFlows[].locations[]``, which *is* the complete path. When you
+are asking "why does this fire?", this step is usually where the answer is.
+
 GitHub 的告警页面**不给数据流**——只告诉你 sink 在哪一行，不告诉你污染是从哪来的。
-而 `codeql database analyze --format=sarif-latest` 的产物里有
+而 ``codeql database analyze --format=sarif-latest`` 的产物里有
 ``runs[].results[].codeFlows[].threadFlows[].locations[]``，那才是完整路径。
 排查「为什么报这个」时，这一步通常是答案所在。
 
-用法
-----
-    python read_sarif.py out.sarif                 # 完整路径
-    python read_sarif.py out.sarif --paths-only    # 只列 sink 位置
-    python read_sarif.py out.sarif --json          # 机器可读
-    python read_sarif.py out.sarif --expect 0      # 断言结果条数（CI 用）
+Usage / 用法
+------------
+    python read_sarif.py out.sarif                 # full path / 完整路径
+    python read_sarif.py out.sarif --paths-only    # sink locations only / 只列 sink 位置
+    python read_sarif.py out.sarif --json          # machine-readable / 机器可读
+    python read_sarif.py out.sarif --expect 0      # assert the result count (CI) / 断言结果条数
 
-退出码：0 = 结果条数为 0（或无 --expect 且无结果）；1 = 有结果/断言失败。
+Exit codes / 退出码：0 = zero results (or ``--expect`` matched) / 无结果或断言通过；
+1 = results present or assertion failed / 有结果或断言失败。
 """
 from __future__ import annotations
 
@@ -116,12 +124,18 @@ def print_report(info: dict, paths_only: bool = False) -> None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="解析 CodeQL SARIF，打印 source→sink 数据流。")
-    ap.add_argument("sarif", nargs="+", help="SARIF 文件（可多个）")
-    ap.add_argument("--json", action="store_true", help="输出机器可读 JSON")
-    ap.add_argument("--paths-only", action="store_true", help="只列 sink 位置，不展开数据流")
+    ap = argparse.ArgumentParser(
+        description="Parse a CodeQL SARIF file and print source->sink data flows. / "
+                    "解析 CodeQL SARIF，打印 source→sink 数据流。")
+    ap.add_argument("sarif", nargs="+",
+                    help="SARIF file(s), one or more / SARIF 文件（可多个）")
+    ap.add_argument("--json", action="store_true",
+                    help="machine-readable JSON, English keys / 输出机器可读 JSON（英文 key）")
+    ap.add_argument("--paths-only", action="store_true",
+                    help="list sink locations only, do not expand the flow / 只列 sink 位置，不展开数据流")
     ap.add_argument("--expect", type=int, metavar="N",
-                    help="断言结果总条数为 N；不符则退出码 1")
+                    help="assert the total result count is N; exit 1 otherwise / "
+                         "断言结果总条数为 N；不符则退出码 1")
     args = ap.parse_args(argv)
 
     infos = []

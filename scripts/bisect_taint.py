@@ -1,35 +1,50 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""变体二分：一次只改一个变量，逐个建库跑同一条查询，用「告警是否消失」定位 taint 源。
+"""Variant bisection: change exactly one thing at a time, rebuild each copy, rerun the same query,
+and locate the taint source by whether the alert disappears.
 
-为什么不用「读 QL 源码推断」
----------------------------
+变体二分：一次只改一个变量，逐个建库跑同一条查询，用「告警是否消失」定位 taint 源。
+
+Why not just read the QL source / 为什么不用「读 QL 源码推断」
+-----------------------------------------------------------
+A QL source definition can have several candidates, and guessing "which one" from reading the source
+is easy to get wrong: a ``base64`` decode, a ``json.dumps`` or an f-string on the path all look like
+plausible sources. Changing one variable at a time and rebuilding gives you a **reproducible causal
+conclusion** in about ten minutes.
+
 QL 的 source 定义可能有好几处候选，靠读源码猜出「是哪一处」很容易错
-（本项目就发生过：先推断是 base64 解码，实验证明真因是变量名）。
-一次只改一个变量、各自建库跑同一条查询，能在十几分钟内给出**可复现的因果结论**。
+（路径上的 ``base64`` 解码、``json.dumps``、f-string 都看着像污染源）。
+一次只改一个变量、各自建库跑同一条查询，十几分钟内就能给出**可复现的因果结论**。
 
-变体约定
---------
-  t1_control   原样复制（自动添加）—— 必须复现告警，否则本地环境与远端不一致，结论不可信
-  t2_xxx       去掉嫌疑 A  —— 0 处 ⇒ A 是成因
-  t3_xxx       去掉嫌疑 B  —— 仍命中 ⇒ B 不是成因
+Variant convention / 变体约定
+-----------------------------
+  t1_control   verbatim copy (added automatically) — **must** reproduce the alert, otherwise the
+               local environment disagrees with the remote one and no conclusion is trustworthy
+               原样复制（自动添加）—— 必须复现告警，否则本地与远端不一致，结论不可信
+  t2_xxx       suspect A removed — 0 results ⇒ A is the cause
+               去掉嫌疑 A —— 0 处 ⇒ A 是成因
+  t3_xxx       suspect B removed — still fires ⇒ B is not the cause
+               去掉嫌疑 B —— 仍命中 ⇒ B 不是成因
 
-用法
-----
+Usage / 用法
+------------
+    # Stage the variants only, without running CodeQL (check the edit first)
     # 只生成变体目录，不跑 CodeQL（先看看改对了没）
-    python bisect_taint.py --source scan.py --tree . --dry-run \
+    python bisect_taint.py --source scan.py --tree . --dry-run \\
         --variant t2_rename=SECRET_PATTERNS:CREDENTIAL_PATTERNS
 
+    # Full run: stage + build + analyse + verdict table
     # 完整跑：生成 + 建库 + 分析 + 出判定表
-    python bisect_taint.py --source scan.py --tree . \
-        --variant t2_rename=SECRET_PATTERNS:CREDENTIAL_PATTERNS \
-        --codeql C:/path/to/codeql.exe \
-        --workdir C:/Temp/taint_bisect
+    python bisect_taint.py --source scan.py --tree . \\
+        --variant t2_rename=SECRET_PATTERNS:CREDENTIAL_PATTERNS \\
+        --codeql /path/to/codeql --workdir /tmp/taint_bisect
 
+    # Change too complex for a literal replacement (regex surgery): edit a copy by hand and swap it in
     # 复杂改动（正则手术那种）：手工做一份改好的文件，整份替换进去
-    python bisect_taint.py --source scan.py --tree . --variant-file t3_nodecode=/tmp/t3.py ...
+    python bisect_taint.py --source scan.py --tree . --variant-file t3=/tmp/t3.py ...
 
-退出码：0 = 跑完且基线复现成功；1 = 基线未复现（结论不可信）；2 = 运行出错。
+Exit codes / 退出码：0 = finished and the baseline reproduced / 跑完且基线复现成功；
+1 = baseline did not reproduce (conclusions invalid) / 基线未复现；2 = runtime error / 运行出错。
 """
 from __future__ import annotations
 
@@ -84,20 +99,32 @@ def read_raw(path: Path) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="变体二分定位 CodeQL taint 源。",
+        description="Locate a CodeQL taint source by variant bisection. / 变体二分定位 CodeQL taint 源。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="退出码：0 = 跑完且基线复现；1 = 基线未复现；2 = 出错。")
-    ap.add_argument("--source", required=True, help="要改的源文件（相对 --tree）")
-    ap.add_argument("--tree", default=".", help="包根目录，整体复制进每个变体（默认当前目录）")
+        epilog="Exit codes / 退出码: 0 = finished, baseline reproduced / 跑完且基线复现; "
+               "1 = baseline not reproduced / 基线未复现; 2 = error / 出错.")
+    ap.add_argument("--source", required=True,
+                    help="file to modify, relative to --tree / 要改的源文件（相对 --tree）")
+    ap.add_argument("--tree", default=".",
+                    help="package root, copied wholesale into each variant (default: cwd) / "
+                         "包根目录，整体复制进每个变体（默认当前目录）")
     ap.add_argument("--variant", action="append", default=[], metavar="NAME=OLD:NEW",
-                    help="字面量替换（可重复）。注意 OLD:NEW 用冒号分隔，NEW 里可含冒号")
+                    help="literal replacement, repeatable. OLD:NEW is colon-separated; NEW may "
+                         "contain colons / 字面量替换（可重复）。OLD:NEW 用冒号分隔，NEW 里可含冒号")
     ap.add_argument("--variant-file", action="append", default=[], metavar="NAME=PATH",
-                    help="整份替换源文件（可重复，用于正则手术类复杂改动）")
-    ap.add_argument("--workdir", default=None, help="变体与产物的落地目录")
-    ap.add_argument("--codeql", default=None, help="codeql 可执行文件；不给则只生成变体")
-    ap.add_argument("--query", default=DEFAULT_QUERY, help=f"查询（默认 {DEFAULT_QUERY}）")
-    ap.add_argument("--language", default="python", help="database create 的 --language")
-    ap.add_argument("--dry-run", action="store_true", help="只生成变体，不跑 CodeQL")
+                    help="swap in a whole file, repeatable (for regex surgery) / "
+                         "整份替换源文件（可重复，用于正则手术类复杂改动）")
+    ap.add_argument("--workdir", default=None,
+                    help="where variants and artifacts are written / 变体与产物的落地目录")
+    ap.add_argument("--codeql", default=None,
+                    help="codeql executable; if omitted, variants are only staged / "
+                         "codeql 可执行文件；不给则只生成变体")
+    ap.add_argument("--query", default=DEFAULT_QUERY,
+                    help=f"query to run (default: {DEFAULT_QUERY}) / 查询（默认同上）")
+    ap.add_argument("--language", default="python",
+                    help="--language passed to database create / database create 的 --language")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="stage variants only, do not run CodeQL / 只生成变体，不跑 CodeQL")
     args = ap.parse_args(argv)
 
     tree = Path(args.tree).resolve()

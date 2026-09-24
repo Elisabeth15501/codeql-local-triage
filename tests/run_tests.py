@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""自测：不需要安装 CodeQL，用仓库内已存的两份实测 SARIF 做断言。
+"""Self-test: needs no CodeQL — it asserts against the two measured SARIF files checked in the repo.
 
-    python tests/run_tests.py        # 也兼容 pytest（函数名以 test_ 开头）
+自测：不需要安装 CodeQL，用仓库内已存的两份实测 SARIF 做断言。
 
-覆盖：
-  1. 预筛脚本的正则自检（分类器与 QL 定义一致）
-  2. repro/scan.py 命中 1 处候选源，repro_fixed/scan.py 干净
-  3. 两份 fixture「除变量名外逐字节相同」——保证对照实验只有一个变量
-  4. read_sarif 能正确判读两份实测 SARIF（1 条 / 0 条）与 --expect 断言
-  5. read_sarif 能从 codeFlows 里取回 source 行，且就是那行敏感名赋值
+    python tests/run_tests.py        # also works under pytest / 也兼容 pytest
+
+Note for pytest: this file is named ``run_tests.py``, so pytest will **not** auto-collect it —
+pass the path explicitly (``pytest tests/run_tests.py``). ``pytest tests/`` collects nothing.
+pytest 注记：本文件名不匹配 ``test_*.py``，pytest 不会自动收集，须显式指定路径；
+``pytest tests/`` 收集不到任何用例。
+
+Coverage / 覆盖：
+  1. regex self-test of the prefilter (the classifier agrees with the QL definitions)
+     预筛脚本的正则自检（分类器与 QL 定义一致）
+  2. repro/scan.py yields 1 candidate source; repro_fixed/scan.py is clean
+     repro/scan.py 命中 1 处候选源，repro_fixed/scan.py 干净
+  3. the two fixtures are byte-identical apart from the variable name — one variable only
+     两份 fixture「除变量名外逐字节相同」——保证对照实验只有一个变量
+  4. read_sarif reads the two measured SARIF files correctly (1 / 0) and honours --expect
+     read_sarif 能正确判读两份实测 SARIF（1 条 / 0 条）与 --expect 断言
+  5. read_sarif recovers the source line from codeFlows, and it is that sensitive-name assignment
+     read_sarif 能从 codeFlows 里取回 source 行，且就是那行敏感名赋值
+
+Note: the assertion labels printed below are Chinese. / 说明：下面打印的断言名称为中文。
 """
 from __future__ import annotations
 
@@ -43,6 +57,23 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 def test_prefilter_self_test() -> None:
     r = _run(SCAN, "--self-test")
     check("预筛脚本正则自检通过", r.returncode == 0, r.stdout[-300:])
+
+
+def test_skill_frontmatter_is_plain_yaml() -> None:
+    """SKILL.md 的 frontmatter 必须是朴素 YAML。
+
+    普通标量里出现「冒号 + 空格」会让 key 被静默截断（技能加载失败却没有任何报错）。
+    中文用全角冒号是安全的；英文冒号后若要跟空格，必须把整个值加引号。
+    """
+    fm = (ROOT / "SKILL.md").read_text(encoding="utf-8").split("---")[1]
+    risks = []
+    for i, line in enumerate(fm.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, sep, value = line.partition(":")
+        if not sep or ": " in value or value.rstrip().endswith(":"):
+            risks.append(f"L{i} key={key!r}")
+    check("SKILL.md frontmatter 无「冒号+空格」类 YAML 陷阱", not risks, "; ".join(risks))
 
 
 def test_repro_has_one_source() -> None:
@@ -126,7 +157,8 @@ def test_read_sarif_extracts_source() -> None:
               f"{flows[0][-1]['file']}:{flows[0][-1]['line']}")
 
 
-TESTS = [test_prefilter_self_test, test_repro_has_one_source, test_fixed_is_clean,
+TESTS = [test_prefilter_self_test, test_skill_frontmatter_is_plain_yaml,
+         test_repro_has_one_source, test_fixed_is_clean,
          test_fixtures_differ_only_in_name, test_read_sarif_counts,
          test_read_sarif_extracts_source]
 

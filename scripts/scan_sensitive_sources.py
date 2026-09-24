@@ -1,43 +1,56 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""免建库预筛：静态枚举 Python 文件里所有可能驱动 CodeQL taint 的「敏感名」。
+"""Prefilter without a database build: statically enumerate every "sensitive name" in Python files
+that could drive a CodeQL taint flow.
 
-原理
-----
+免建库预筛：静态枚举 Python 文件里所有可能驱动 CodeQL taint 的「敏感名」。
+
+Why / 原理
+----------
+py/clear-text-storage-sensitive-data (CWE-312) and similar rules pick their source **by name, never
+by content**. This script re-implements that decision equivalently, so candidate sources can be listed
+without a database build (measured: ~9 minutes for a whole repo). Each hit is printed with its source
+class, line number and the reason it matched.
+
 py/clear-text-storage-sensitive-data（CWE-312）等规则的 source **不看内容、只看名字**。
-本脚本把 CodeQL 的判定逻辑等价重实现一遍，这样不必建库（实测整仓建库要 ~9 分钟）
-就能先列出候选源。它会打印每个命中点的 **source 类别 + 行号 + 命中理由**。
+本脚本把 CodeQL 的判定逻辑等价重实现一遍，这样不必建库（实测整仓建库要 ~9 分钟）就能先列出候选源。
+它会打印每个命中点的 **source 类别 + 行号 + 命中理由**。
 
-照着抄的来源（github/codeql，MIT）：
-  shared/concepts/codeql/concepts/internal/SensitiveDataHeuristics.qll    -> 正则
-  python/ql/lib/semmle/python/dataflow/new/SensitiveDataSources.qll       -> source 类
+Upstream references (github/codeql, MIT) / 照着抄的来源：
+  shared/concepts/codeql/concepts/internal/SensitiveDataHeuristics.qll    -> regexes / 正则
+  python/ql/lib/semmle/python/dataflow/new/SensitiveDataSources.qll       -> source classes / source 类
   python/ql/lib/semmle/python/security/dataflow/CleartextStorageCustomizations.qll
-                                                                          -> 用哪些 source
+                                                                          -> which sources are used
 
-source 类共 7 种，全部依赖名字/字面量启发式：
-  SensitiveVariableAssignment  赋值给敏感名（assign / for / with）
-  SensitiveAttributeAccess     x.<敏感名>
-  SensitiveSubscript           x["敏感字面量"]
-  SensitiveGetCall             x.get("敏感字面量")
-  SensitiveParameter           形参名敏感
-  SensitiveFunctionCall        调用敏感名的函数
-  GetPassCall                  getpass.getpass()
+Seven source classes, all name/literal-heuristic driven / source 类共 7 种，全部依赖名字/字面量启发式：
+  SensitiveVariableAssignment   assignment to a sensitive name (assign / for / with) / 赋值给敏感名
+  SensitiveAttributeAccess      x.<sensitive name>
+  SensitiveSubscript            x["sensitive literal"]
+  SensitiveGetCall              x.get("sensitive literal")
+  SensitiveParameter            a parameter whose name is sensitive / 形参名敏感
+  SensitiveFunctionCall         calling a function with a sensitive name / 调用敏感名的函数
+  GetPassCall                   getpass.getpass()
 
-用法
-----
+Usage / 用法
+------------
     python scan_sensitive_sources.py path/to/file.py
-    python scan_sensitive_sources.py src/ --json          # 递归扫目录
+    python scan_sensitive_sources.py src/ --json          # recurse into a dir / 递归扫目录
     python scan_sensitive_sources.py $(git ls-files '*.py')
 
-退出码：0 = 未发现候选源；1 = 发现候选源（可直接用作 CI 门禁）。
+Exit codes / 退出码：0 = no candidate source / 未发现候选源；1 = candidates found / 发现候选源
+（usable directly as a CI gate / 可直接用作 CI 门禁）。
 
-移植注记（QL -> Python re 的两个坑）
-------------------------------------
-1. QL 支持变长 lookbehind，`(?<!is|is_)` 在 Python 会抛
-   ``re.error: look-behind requires fixed-width pattern``，
+Porting notes: QL -> Python re, two pitfalls / 移植注记（QL -> Python re 的两个坑）
+----------------------------------------------------------------------------------
+1. QL allows variable-width lookbehind. ``(?<!is|is_)`` raises
+   ``re.error: look-behind requires fixed-width pattern`` in Python; rewrite it as several
+   fixed-width assertions in series, ``(?<!is)(?<!is_)`` (all must pass for the exclusion to apply).
+   QL 支持变长 lookbehind，``(?<!is|is_)`` 在 Python 会抛该异常，
    等价改写为多个定长断言串联 ``(?<!is)(?<!is_)``（须同时通过才排除）。
-2. 内联 ``(?is)`` 不能出现在表达式中间，会抛
-   ``global flags not at the start of the expression``；
+2. An inline ``(?is)`` cannot appear mid-expression: it raises
+   ``global flags not at the start of the expression``. Pass the flags to ``re.compile`` instead;
+   when branches of one regex need different flags, split them into separate compiled patterns.
+   内联 ``(?is)`` 不能出现在表达式中间，会抛该异常；
    把 flags 作为参数传给 ``re.compile``，同一分支内 flag 不同就拆成多条 pattern 取并集。
 """
 from __future__ import annotations
@@ -189,17 +202,19 @@ def iter_py_files(paths: list[str]) -> list[Path]:
 
 
 SELF_TEST_CASES = {
+    # name -> expected classifications ([] = must be clean)
     # 名字 -> 期望命中的 classification（[] 表示应为干净）
-    "SECRET_PATTERNS": ["secret"],
-    "CREDENTIAL_PATTERNS": [],
-    "LEAK_PATTERNS": [],
-    "TOKEN_SHAPES": [],
+    "SECRET_PATTERNS": ["secret"],      # the positive demo name / 正面样例
+    "CREDENTIAL_PATTERNS": [],          # renamed -> no longer sensitive / 改名后干净
+    "secretary": [],                    # matches "secret", then ruled out by notSensitiveRegexp
+    "accountant": [],                   # matches "account", likewise ruled out / 同上，排除表拦下
+    "classname": [],                    # contains "ssn" but the pattern needs a word boundary
+                                        # 含 "ssn" 子串，但模式要求词边界 -> 干净
     "secret": ["secret"],
     "api_key": ["password"],
     "user_id": ["id"],
     "session_token": [],
     "[REDACTED_SECRET]": [],
-    "swissre": [],
     "path": [],
 }
 
@@ -218,13 +233,20 @@ def self_test() -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="免建库预筛：枚举 Python 文件里可能驱动 CodeQL taint 的敏感名。",
+        description="Prefilter without a DB build: list Python names that may drive a CodeQL taint "
+                    "flow. / 免建库预筛：枚举 Python 文件里可能驱动 CodeQL taint 的敏感名。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="退出码：0 = 未发现候选源；1 = 发现候选源。")
-    ap.add_argument("paths", nargs="*", help="待扫的 .py 文件或目录（目录会递归）")
-    ap.add_argument("--json", action="store_true", help="输出机器可读 JSON")
-    ap.add_argument("--quiet", action="store_true", help="只打印每文件计数")
-    ap.add_argument("--self-test", action="store_true", help="跑内置正则自检后退出")
+        epilog="Exit codes / 退出码: 0 = no candidate source / 未发现候选源; "
+               "1 = candidates found / 发现候选源.")
+    ap.add_argument("paths", nargs="*",
+                    help=".py files or directories to scan (directories recurse) / "
+                         "待扫的 .py 文件或目录（目录会递归）")
+    ap.add_argument("--json", action="store_true",
+                    help="machine-readable JSON, English keys / 输出机器可读 JSON（英文 key）")
+    ap.add_argument("--quiet", action="store_true",
+                    help="print per-file counts only / 只打印每文件计数")
+    ap.add_argument("--self-test", action="store_true",
+                    help="run the built-in regex self-test and exit / 跑内置正则自检后退出")
     args = ap.parse_args(argv)
 
     if args.self_test:

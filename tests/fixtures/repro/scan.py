@@ -1,8 +1,8 @@
-"""CodeQL 敏感名启发式误报的最小复现（成对使用，两份除变量名外逐字节相同）。
+"""Minimal repro of a CodeQL name-heuristic false positive — a pair, byte-identical except the
+variable name. No credential in here; it just matches text against a few patterns and writes JSON.
 
-这个文件里没有任何凭据，做的只是「用几个正则匹配文本，把结果写进 JSON」。
-
-哪一份触发告警、为什么、以及实测 SARIF 的解读，见 ../README.md。
+CodeQL 敏感名启发式误报的最小复现：成对使用，两份除变量名外逐字节相同。此文件不含任何凭据，
+只做「用几个正则匹配文本、把结果写进 JSON」。哪一份触发告警、为什么，见 ../README.md。
 """
 import json
 from pathlib import Path
