@@ -180,6 +180,7 @@ python tests/run_tests.py        # 或 pytest tests/ -q
 │       ├── repro_fixed/scan.py     对照（只改了变量名）
 │       └── sarif/                  两份实测 SARIF
 ├── SKILL.md
+├── NOTICE                          第三方署名
 └── LICENSE
 ```
 
@@ -202,5 +203,6 @@ python tests/run_tests.py        # 或 pytest tests/ -q
 `references/sensitive-data-heuristics.md` 与 `scripts/scan_sensitive_sources.py` 中的正则、
 QL 片段取自 [github/codeql](https://github.com/github/codeql)（MIT License，Copyright GitHub, Inc.），
 本项目是对这些定义的**可读重述与等价移植**，非 GitHub 官方产物。
+逐文件对应关系见 [NOTICE](NOTICE)；若与上游不一致，以**上游为准**。
 
 本项目以 [MIT License](LICENSE) 发布。
