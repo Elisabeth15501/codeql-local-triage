@@ -1,5 +1,11 @@
 # Test fixtures / 测试夹具
 
+> **⚠️ 这些 fixture 是刻意构造的模拟样本 / These fixtures are synthetic by design.**
+> `repro/scan.py` 里的 `SECRET_PATTERNS` **不是真凭据**——只是「`sk-…` / `ghp_…` 形状」的
+> **正则 pattern 字符串**，里面**没有任何真实 token 或密钥**（free of any real credential）。
+> 它之所以被保留，是为了复现「名字命中 CodeQL 名字启发式」这一最小误报，供教学与可复现验证使用，
+> 不涉及任何真实凭据的读取或流转。
+
 > These files are **measured artifacts with local paths sanitized**, not hand-written examples.
 > The two `.sarif` files were produced by the commands below; absolute paths in their
 > `extensions[].locations[].uri` fields were replaced with the neutral placeholder

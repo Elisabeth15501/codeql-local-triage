@@ -1,0 +1,10 @@
+# ClawHub package exclusions
+# ClawHub enforces MIT-0 site-wide; a per-skill LICENSE file reads as a conflicting
+# license term, so it must be excluded from the published package.
+# NOTICE is kept: it is third-party attribution, not a license override (MIT-0 compatible).
+LICENSE
+
+# Build / cache noise
+__pycache__/
+*.pyc
+.pytest_cache/

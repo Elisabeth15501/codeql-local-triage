@@ -1,6 +1,16 @@
 ---
 name: codeql-local-triage
-description: 在本地复现 GitHub Code Scanning（CodeQL）告警、用「变体二分」定位 taint 源并验证修复。当用户说「确认 taint 源 / 复现这个 CodeQL 告警 / 为什么 CodeQL 报这个 / 本地跑一次 CodeQL / 验证安全告警是否修好 / 这个告警是不是误报」，或需要判断某个 Code Scanning 告警是真漏洞还是误报时使用。也适用于给任意仓库做单条 CodeQL 查询的本地验收。Reproduce CodeQL / Code Scanning alerts locally, locate the taint source by variant bisection, and verify a fix before pushing — use this when asked to confirm a taint source, to triage whether an alert is a false positive, or to validate a security alert fix locally. 关键词／keywords：CodeQL、Code Scanning、taint source、数据流、SARIF、codeFlows、误报、false positive、py/clear-text-storage-sensitive-data、CWE-312。
+slug: codeql-local-triage
+version: 1.0.0
+displayName: 本地 CodeQL 告警定位与修复验收
+summary: 在本地复现 CodeQL 告警、用变体二分定位 taint 源并验证修复，给出可复现的因果结论。
+homepage: https://github.com/Elisabeth15501/codeql-local-triage
+tags: [CodeQL 误报, taint source 定位, false positive triage, 静态分析告警复现, data flow 复现, SARIF, codeFlows]
+metadata:
+  openclaw:
+    requires:
+      bins: [python3]
+description: 不替你跑扫描，而是回答「这条 CodeQL 告警为什么报、改哪一行才会消失」——用变体二分给出可复现的因果结论。当用户说「确认 taint 源 / 复现这个 CodeQL 告警 / 为什么 CodeQL 报这个 / 本地跑一次 CodeQL / 验证安全告警是否修好 / 这个告警是不是误报」，或需要判断某个 Code Scanning 告警是真漏洞还是误报时使用。也适用于给任意仓库做单条 CodeQL 查询的本地验收。We don't run the scan for you. Instead we answer "why did CodeQL flag this, and which line must change for it to stop" — variant bisection yields a reproducible causal conclusion. Use this when asked to confirm a taint source, to triage whether an alert is a false positive, or to validate a security alert fix locally. 关键词／keywords：CodeQL、Code Scanning、taint source、数据流、SARIF、codeFlows、误报、false positive、py/clear-text-storage-sensitive-data、CWE-312。
 agent_created: true
 ---
 
@@ -12,6 +22,9 @@ agent_created: true
 > 所有示例均为**模拟代码**，不含任何真实项目源码。
 > **All examples are synthetic sample code**; no real project source is included.
 
+> **卖点：两个脚本零依赖 / Zero-dependency selling point.** `scan_sensitive_sources.py`（预筛）与 `read_sarif.py`（读 SARIF）**不装 CodeQL 也能跑**——只有 `bisect_taint.py` 建库时才需要 CodeQL CLI。Try the triage in seconds, install the 400 MB CLI only when you want the controlled experiment.
+> **两个脚本零依赖**，先把判定跑起来，400MB 的 CLI 等真要做对照实验再装。
+
 GitHub's alert page **gives you no data flow** (it only marks the sink), remote scans take minutes, and
 you cannot run a controlled experiment there. Running a single query locally plus variant bisection
 gives you a **reproducible causal conclusion** in about ten minutes.
@@ -21,6 +34,56 @@ GitHub 的告警页面**不给数据流**（只标 sink 那一行），远端扫
 
 All scripts live in `scripts/` inside this skill directory; `scripts/xxx.py` below refers to them.
 脚本都在本技能目录下的 `scripts/`，下文的 `scripts/xxx.py` 均指这里。
+
+> **示例与 fixture 均为刻意构造的模拟样本 / All samples are synthetic by design.**
+> `tests/fixtures/repro/scan.py` 里的 `SECRET_PATTERNS` **不是真凭据**——它只是一组「`sk-…` / `ghp_…` 形状」的**正则 pattern 字符串**，里面**没有任何真实 token 或密钥**（free of any real credential）。
+> 它是为复现「名字命中 CodeQL 名字启发式（`maybeSecret()`）」这一**最小误报**而**故意保留**的：用途是教学与可复现验证，不是任何真实凭据的流转。
+> 下游只把扫描结果落盘到**临时目录**（`bisect_taint.py --workdir` 指定，默认 `/tmp/taint_bisect`），不会写出任何真实凭据。
+
+## 适用范围与边界 / Scope & boundaries
+
+本技能**不替代**整套 Code Scanning 扫描。它的定位是**单条查询的因果定位**：把一条具体告警的
+source → sink 路径完整复现出来，并回答「为什么报、改哪一行才会消失」。它**不适用于**对整库做
+完整的安全告警排查（那是整套 suite 的职责）。
+
+**运行期依赖 / Runtime dependencies**：
+
+- 三个脚本由 `python` / `python3` 执行（已在 frontmatter 声明 `metadata.openclaw.requires.bins`）。
+- **CodeQL CLI 是可选依赖**：只在 `bisect_taint.py` 真正建库跑查询时需要；预筛
+  （`scan_sensitive_sources.py`）与读 SARIF（`read_sarif.py`）两步**零依赖**，不装 CodeQL 也能跑。
+
+**当前深耕 / Currently focused**：
+
+- **语言**：Python（预筛脚本 `scan_sensitive_sources.py` 只覆盖 `py/*` 查询；`read_sarif.py`
+  与 `bisect_taint.py` 与语言无关）。
+  **多语言 roadmap**：Java / JavaScript / Go 的等价预筛与变体二分是后续规划，不是当前能力。
+- **规则**：以 `py/clear-text-storage-sensitive-data`（CWE-312，名字启发式误报）为主战场——
+  因为它的 source 判定**不看内容、只看名字**，最适合用变体二分证伪。
+
+**不做的事 / Out of scope**：
+
+- 不做 LLM 判读或告警优先级排序——结论来自可复现的对照实验，而非模型主观判断。
+- 不替代 CI：告警的最终 `state` 由 GitHub 自己的扫描决定，本技能只负责在推送前把因果查清楚。
+
+本技能**适用于**：你手上已有一条具体 CodeQL / Code Scanning 告警，想确认它是真漏洞还是误报，
+或想在推送前本地验证修复是否生效。
+
+## 权限与可用性声明 / Permissions & availability
+
+**最小权限 / Least privilege.** 本技能只做三件事，不越界：
+
+- 读你指定的**本地源码文件**（只读，不修改待查仓库）；
+- 把扫描产物写到你指定的**临时目录**（`bisect_taint.py --workdir`，默认 `/tmp/taint_bisect`），不写项目目录；
+- 执行本地 **`python`** 子进程，以及（仅当真正建库跑查询时）可选的 **`codeql`** 子进程。
+
+它**不联网、不读凭据、不改仓库、不写除临时目录外的任何位置**。所有样例数据均为模拟样本（见上「适用范围与边界」）。
+
+**可用性降级路径 / Availability fallback.** CodeQL CLI 是**可选依赖**：
+
+- 若 CodeQL CLI 因网络或环境原因暂不可得，`scan_sensitive_sources.py`（预筛）与 `read_sarif.py`（读 SARIF）两步**仍零依赖可用**，足以完成「是否命中名字启发式」「数据流长什么样」两类判定；
+- `bisect_taint.py` 不强制联网下载——可直接指向你本机已安装的 `codeql` 可执行文件（`--codeql /path/to/codeql`），无需任何额外网络配置即可跑对照实验。
+
+换言之，**核心判定不依赖一次海外大体积下载**；CLI 只是把「可复现因果结论」从两步推进到第三步的增强项。
 
 ## 0. When to use / 何时用
 
@@ -118,6 +181,9 @@ Change exactly one thing at a time, rebuild each variant, rerun the same query, 
 alert disappears.
 
 一次只改一个变量，各自建库跑同一条查询，看告警是否消失。
+
+> **「变体二分」≠ Trail of Bits 的 `variant-analysis`。** 我们的 **variant bisection** 是**一次只改一个变量、用对照实验定位单条告警的 taint 成因**（归因 / root-cause）；`variant-analysis` 是在多个项目里**找同一 bug 的其他实例**（普查 / sweep）。两者方向相反，别装错、也别归类错。
+> **variant bisection ≠ Trail of Bits' variant-analysis.** We locate the *cause* of **one** alert by a controlled experiment; variant-analysis finds *other instances* of the same bug across codebases. Opposite goals.
 
 ```bash
 # Inspect the change without building anything / 先确认改动对不对（不建库）
