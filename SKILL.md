@@ -10,7 +10,7 @@ metadata:
   openclaw:
     requires:
       bins: [python3]
-description: 不替你跑扫描，而是回答「这条 CodeQL 告警为什么报、改哪一行才会消失」——用变体二分给出可复现的因果结论。当用户说「确认 taint 源 / 复现这个 CodeQL 告警 / 为什么 CodeQL 报这个 / 本地跑一次 CodeQL / 验证安全告警是否修好 / 这个告警是不是误报」，或需要判断某个 Code Scanning 告警是真漏洞还是误报时使用。也适用于给任意仓库做单条 CodeQL 查询的本地验收。We don't run the scan for you. Instead we answer "why did CodeQL flag this, and which line must change for it to stop" — variant bisection yields a reproducible causal conclusion. Use this when asked to confirm a taint source, to triage whether an alert is a false positive, or to validate a security alert fix locally. 关键词／keywords：CodeQL、Code Scanning、taint source、数据流、SARIF、codeFlows、误报、false positive、py/clear-text-storage-sensitive-data、CWE-312。
+description: 不替你跑扫描，而是回答「这条 CodeQL 告警为什么报、改哪一行才会消失」——用变体二分给出可复现的因果结论。当用户说「确认 taint 源 / 复现这个 CodeQL 告警 / 为什么 CodeQL 报这个 / 本地跑一次 CodeQL / 验证安全告警是否修好 / 这个告警是不是误报」，或需要判断某个 Code Scanning 告警是真漏洞还是误报时使用。也适用于给任意仓库做单条 CodeQL 查询的本地验收。它**不用于**整库安全审计、不替代 GitHub 原生扫描、也不用于非 CodeQL 类（如 SAST/SCA 商业工具）扫描结果的判定。We don't run the scan for you. Instead we answer "why did CodeQL flag this, and which line must change for it to stop" — variant bisection yields a reproducible causal conclusion. Use this when asked to confirm a taint source, to triage whether an alert is a false positive, or to validate a security alert fix locally. It is NOT for whole-repo security audits, replacing GitHub's native scanning, or triaging non-CodeQL scanners (SAST/SCA vendors). 关键词／keywords：CodeQL、Code Scanning、taint source、数据流、SARIF、codeFlows、误报、false positive、py/clear-text-storage-sensitive-data、CWE-312。
 agent_created: true
 ---
 
@@ -22,8 +22,7 @@ agent_created: true
 > 所有示例均为**模拟代码**，不含任何真实项目源码。
 > **All examples are synthetic sample code**; no real project source is included.
 
-> **卖点：两个脚本零依赖 / Zero-dependency selling point.** `scan_sensitive_sources.py`（预筛）与 `read_sarif.py`（读 SARIF）**不装 CodeQL 也能跑**——只有 `bisect_taint.py` 建库时才需要 CodeQL CLI。Try the triage in seconds, install the 400 MB CLI only when you want the controlled experiment.
-> **两个脚本零依赖**，先把判定跑起来，400MB 的 CLI 等真要做对照实验再装。
+> **卖点：两个脚本零依赖 / Zero-dependency selling point.** `scan_sensitive_sources.py`（预筛）与 `read_sarif.py`（读 SARIF）**不装 CodeQL 也能跑**——只有 `bisect_taint.py` 建库时才需要 CodeQL CLI（~400 MB）。Try the triage in seconds; install the CLI only when you want the controlled experiment.
 
 GitHub's alert page **gives you no data flow** (it only marks the sink), remote scans take minutes, and
 you cannot run a controlled experiment there. Running a single query locally plus variant bisection
@@ -168,6 +167,17 @@ python scripts/bisect_taint.py --source scan.py --tree . \
     --variant t2_rename=SECRET_PATTERNS:CREDENTIAL_PATTERNS \
     --codeql /path/to/codeql --workdir /tmp/taint_bisect
 ```
+
+### 参数与产物命名 / Parameters & artifact naming
+
+- `--workdir <dir>`（可选）：变体目录与产物的落地目录。**不给时默认 `<--tree>/_bisect`**（包根下的 `_bisect/`，已被拷贝时的 ignore 列表排除，不会污染待查仓库）；示例常显式传 `/tmp/taint_bisect` 把它放到系统临时区。
+  **覆盖行为**：每次运行会**清空并重建**各变体目录（含其中的 `_db`），所以重复运行是幂等的、不会累积旧产物。
+- `--codeql <path>`（可选）：指向本机已安装的 `codeql` 可执行文件。**不给则只生成变体、不跑查询**（退出码 0，并打印等价建库/分析命令模板），方便先 `--dry-run` 核对改动对不对。
+- 产物命名规则 / Artifact naming：
+  - 变体目录：`workdir/<NAME>/`（如 `workdir/t1_control/`、`workdir/t2_rename/`）
+  - 每变体数据库：`workdir/<NAME>/_db`
+  - 每变体 SARIF：`workdir/<NAME>.sarif`（**与变体目录同级、同名加 `.sarif` 后缀**，不在目录内）
+  - 判定表：直接打印到 stdout，不落盘
 
 When a change is too complex for a literal replacement (regex surgery), produce the edited file by
 hand and swap the whole file in: `--variant-file t3=/tmp/t3.py`.
