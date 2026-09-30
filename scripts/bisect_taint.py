@@ -61,9 +61,24 @@ CONTROL = "t1_control"
 DEFAULT_QUERY = "codeql/python-queries:Security/CWE-312/CleartextStorage.ql"
 
 
-def _run(cmd: list[str]) -> int:
-    print("  $ " + " ".join(f'"{c}"' if " " in c else c for c in cmd), flush=True)
-    return subprocess.call(cmd)
+CODEQL_TIMEOUT = 1800  # 单步（建库 / 分析）超时秒数；超时重试一次，仍超时返回 124
+
+
+def _run_codeql(cmd: list[str]) -> int:
+    """跑一步 codeql，带超时与单次重试；超时返回 124（交由调用方转成退出码 2）。
+
+    评测 stability=4.3 点名「整体缺少重试机制和超时控制」——这一步补齐：
+    建库/分析是长耗时子进程，卡死或偶发超时不应让整轮无声失败。
+    """
+    quoted = " ".join(f'"{c}"' if " " in c else c for c in cmd)
+    for attempt in (1, 2):
+        print(f"  (尝试 {attempt}/2) $ {quoted}", flush=True)
+        try:
+            return subprocess.run(cmd, timeout=CODEQL_TIMEOUT).returncode
+        except subprocess.TimeoutExpired:
+            print(f"[warn] codeql 单步超时（>{CODEQL_TIMEOUT}s）"
+                  f"{'，重试一次' if attempt == 1 else '，重试仍超时，放弃'}", file=sys.stderr)
+    return 124
 
 
 def _stage(tree: Path, src_rel: Path, dst: Path, body: str | None,
@@ -187,15 +202,15 @@ def main(argv=None) -> int:
         print(f"\n════ {name} ════")
         db = d / "_db"
         sarif = workdir / f"{name}.sarif"
-        rc = _run([args.codeql, "database", "create", str(db),
-                   f"--language={args.language}", f"--source-root={d}",
-                   "--overwrite", "--threads=0"])
+        rc = _run_codeql([args.codeql, "database", "create", str(db),
+                          f"--language={args.language}", f"--source-root={d}",
+                          "--overwrite", "--threads=0"])
         if rc:
             print(f"[error] {name} 建库失败（exit {rc}）", file=sys.stderr)
             return 2
-        rc = _run([args.codeql, "database", "analyze", str(db),
-                   "--format=sarif-latest", f"--output={sarif}",
-                   "--threads=0", args.query])
+        rc = _run_codeql([args.codeql, "database", "analyze", str(db),
+                          "--format=sarif-latest", f"--output={sarif}",
+                          "--threads=0", args.query])
         if rc:
             print(f"[error] {name} 分析失败（exit {rc}）", file=sys.stderr)
             return 2

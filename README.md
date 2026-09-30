@@ -150,6 +150,8 @@ file, `tests/fixtures/sarif/repro_fixed.sarif`. Two things about this fix are wo
 | `scripts/read_sarif.py` | **Reads `codeFlows` from SARIF** and prints the whole source→sink path, step by step. This step is usually where the answer is. Supports `--expect N` for assertions.<br>**读 SARIF 的 `codeFlows`**，按步打印 source→sink 全路径。这一步通常就是答案所在。支持 `--expect N` 做断言。 |
 | `scripts/bisect_taint.py` | **Variant bisection.** Generates "one change only" copies of the tree → builds and analyses each → prints a verdict table. Aborts if the baseline does not reproduce, so you never trust an invalid conclusion.<br>**变体二分**。生成「只改一处」的副本 → 逐个建库+分析 → 输出判定表。基线没复现就直接报错，避免采信无效结论。 |
 | `references/sensitive-data-heuristics.md` | Cheat sheet for the name heuristics: 5 regex groups, the exclusion regex, 7 source categories, and the CWE-312 source/sink special cases.<br>名字启发式速查表：5 组正则、反向排除器、7 类 source、CWE-312 的 source/sink 特例。 |
+| `references/faq.md` | **High-frequency questions in one place**: what to do when the baseline does not reproduce, how to make a variant for a complex change, whether you can just dismiss an alert, which names are *not* sensitive.<br>**高频问题集中收口**：基线没复现怎么办、复杂改动怎么做变体、能不能直接 dismiss、哪些名字不算敏感源。 |
+| `references/README.md` | Index of the `references/` directory: what each file is for and when to read it.<br>`references/` 目录索引：每个文件的用途与适用场景。 |
 | `SKILL.md` | The skill definition for AI agents (Claude Code / WorkBuddy / …); installable as a whole.<br>给 AI agent 用的技能定义，可整套安装。 |
 | `tests/` | Self-test that needs **no CodeQL**: two *measured* SARIF fixtures plus per-item assertions.<br>不需要 CodeQL 的自测：两份**实测** SARIF fixture + 逐项断言。 |
 

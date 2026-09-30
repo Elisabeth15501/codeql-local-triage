@@ -1,7 +1,7 @@
 ---
 name: codeql-local-triage
 slug: codeql-local-triage
-version: 1.0.1
+version: 1.0.2
 displayName: 本地 CodeQL 告警定位与修复验收
 summary: 在本地复现 CodeQL 告警、用变体二分定位 taint 源并验证修复，给出可复现的因果结论。
 homepage: https://github.com/Elisabeth15501/codeql-local-triage
@@ -116,6 +116,10 @@ All three have `--help`. `scan_sensitive_sources.py` and `read_sarif.py` are **z
 run without CodeQL.
 
 三个脚本都带 `--help`。前两个是**零依赖**的，没装 CodeQL 也能跑。
+
+> **退出码契约 / Exit-code contract.** 三个脚本统一：`0` = 成功 / 未发现候选源；`1` = 发现候选源或基线未复现（**判定结果**，可作 CI 门禁）；`2` = 输入 / 运行错误（路径不存在、`codeql` 调用失败、超时等，需排查）。缺失路径**不会**被误判成「干净」——这是 v1.0.2 修掉的回归点。
+>
+> 高频问题（基线没复现怎么办 / 复杂改动怎么做变体 / 能不能直接 dismiss / 哪些名字不算敏感源）集中收口在 **`references/faq.md`**；`references/` 下每个文件的用途见 **`references/README.md`**。
 
 ## 2. Installing the CodeQL CLI / 安装 CodeQL CLI
 
@@ -295,3 +299,10 @@ still agrees with the QL definitions.
   no output) and `git check-attr export-ignore -- <path>` (expect `export-ignore: set`).
   `git archive HEAD` 只读 **HEAD 树里的** `.gitattributes`；文件未跟踪时 `export-ignore` 静默失效。
   自检：前者须无输出，后者须返回 `export-ignore: set`
+
+## 10. 延伸阅读 / Further reading
+
+- **`references/README.md`** — `references/` 目录索引：每个文件的用途与适用场景一览。
+- **`references/faq.md`** — 高频问题集中收口：基线未复现、复杂改动怎么做变体、能否直接 dismiss、哪些名字不算敏感源。
+- **`references/running-codeql-cli.md`** — 安装 / 验证 CodeQL CLI 的完整步骤链（第 ③ 步 `bisect_taint.py` 需要它）。
+- **`references/sensitive-data-heuristics.md`** — 名字启发式规则原理速查（正向 7 类 source + 反向排除器）。

@@ -37,8 +37,11 @@ Usage / 用法
     python scan_sensitive_sources.py src/ --json          # recurse into a dir / 递归扫目录
     python scan_sensitive_sources.py $(git ls-files '*.py')
 
-Exit codes / 退出码：0 = no candidate source / 未发现候选源；1 = candidates found / 发现候选源
-（usable directly as a CI gate / 可直接用作 CI 门禁）。
+Exit codes / 退出码：
+  0 = no candidate source / 未发现候选源
+  1 = candidates found / 发现候选源
+  2 = input / runtime error（所给路径不存在、文件全部解析失败等）
+可直接用作 CI 门禁：0 / 1 是判定结果，2 是运行错误需排查。
 
 Porting notes: QL -> Python re, two pitfalls / 移植注记（QL -> Python re 的两个坑）
 ----------------------------------------------------------------------------------
@@ -188,8 +191,14 @@ def scan_source(text: str) -> tuple[list[dict], list[str]]:
     return sorted(found, key=lambda x: x["line"]), str_lits
 
 
-def iter_py_files(paths: list[str]) -> list[Path]:
+def iter_py_files(paths: list[str]) -> tuple[list[Path], list[Path]]:
+    """返回 (命中文件列表, 不存在的路径列表)。
+
+    不存在的路径单独收集出来交回 main —— 缺失输入是「运行错误」而非「干净」，
+    否则 CI 会把「路径拼错 / 文件被删」误判成「无候选源」。
+    """
     out: list[Path] = []
+    missing: list[Path] = []
     for raw in paths:
         p = Path(raw)
         if p.is_dir():
@@ -198,7 +207,8 @@ def iter_py_files(paths: list[str]) -> list[Path]:
             out.append(p)
         else:
             print(f"[warn] 路径不存在，跳过: {p}", file=sys.stderr)
-    return out
+            missing.append(p)
+    return out, missing
 
 
 SELF_TEST_CASES = {
@@ -236,8 +246,8 @@ def main(argv=None) -> int:
         description="Prefilter without a DB build: list Python names that may drive a CodeQL taint "
                     "flow. / 免建库预筛：枚举 Python 文件里可能驱动 CodeQL taint 的敏感名。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Exit codes / 退出码: 0 = no candidate source / 未发现候选源; "
-               "1 = candidates found / 发现候选源.")
+        epilog="Exit codes / 退出码: 0 = 未发现候选源; 1 = 发现候选源; "
+               "2 = 输入/运行错误（路径不存在等）。")
     ap.add_argument("paths", nargs="*",
                     help=".py files or directories to scan (directories recurse) / "
                          "待扫的 .py 文件或目录（目录会递归）")
@@ -254,7 +264,11 @@ def main(argv=None) -> int:
     if not args.paths:
         ap.error("至少要给一个文件或目录（或用 --self-test）")
 
-    files = iter_py_files(args.paths)
+    files, missing = iter_py_files(args.paths)
+    if missing:
+        print(f"\n[error] {len(missing)} 个输入路径不存在，已中止："
+              + ", ".join(str(p) for p in missing), file=sys.stderr)
+        return 2
     report, total = [], 0
     for p in files:
         try:

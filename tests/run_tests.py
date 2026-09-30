@@ -97,6 +97,13 @@ def test_fixed_is_clean() -> None:
     check("无候选源时退出码为 0", r.returncode == 0, f"实际 {r.returncode}")
 
 
+def test_missing_path_returns_2() -> None:
+    """R1 回归：缺失路径必须返回 2（输入错误），绝不能误判为 0（干净）。"""
+    r = _run(SCAN, "this_path_does_not_exist_anywhere_12345.py", "--json")
+    check("缺失路径时退出码为 2（非 0）", r.returncode == 2, f"实际 {r.returncode}")
+    check("缺失路径时 stderr 给出提示", "不存在" in r.stderr, r.stderr[-200:])
+
+
 def test_fixtures_differ_only_in_name() -> None:
     """两份 fixture 必须「除这个变量名外」逐字节相同，否则对照实验混入了别的变量。
 
@@ -159,6 +166,7 @@ def test_read_sarif_extracts_source() -> None:
 
 TESTS = [test_prefilter_self_test, test_skill_frontmatter_is_plain_yaml,
          test_repro_has_one_source, test_fixed_is_clean,
+         test_missing_path_returns_2,
          test_fixtures_differ_only_in_name, test_read_sarif_counts,
          test_read_sarif_extracts_source]
 
