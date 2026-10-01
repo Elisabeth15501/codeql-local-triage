@@ -35,13 +35,13 @@ Usage / 用法
 ------------
     python scan_sensitive_sources.py path/to/file.py
     python scan_sensitive_sources.py src/ --json          # recurse into a dir / 递归扫目录
-    python scan_sensitive_sources.py $(git ls-files '*.py')
+    python scan_sensitive_sources.py $(git ls-files '*.py')   # 输出「候选源清单」，不是审计结论
 
 Exit codes / 退出码：
   0 = no candidate source / 未发现候选源
   1 = candidates found / 发现候选源
   2 = input / runtime error（所给路径不存在、文件全部解析失败等）
-可直接用作 CI 门禁：0 / 1 是判定结果，2 是运行错误需排查。
+可对你关心的文件/目录做**候选源清点**（**非审计结论**）：0 / 1 是判定结果，2 是运行错误需排查。
 
 Porting notes: QL -> Python re, two pitfalls / 移植注记（QL -> Python re 的两个坑）
 ----------------------------------------------------------------------------------

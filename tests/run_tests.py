@@ -44,8 +44,10 @@ FAILS: list[str] = []
 
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
+    # 列表传参、shell=False、执行本仓脚本（本地受信），无外部输入（S5 安全整改）
     return subprocess.run([sys.executable, str(script), *args],
-                          capture_output=True, text=True, encoding="utf-8")
+                          capture_output=True, text=True, encoding="utf-8",
+                          shell=False)
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:

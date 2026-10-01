@@ -1,4 +1,4 @@
-"""Minimal repro of a CodeQL name-heuristic false positive — a pair, byte-identical except the
+"""TEST FIXTURE — NOT THE SKILL IMPLEMENTATION / 测试样本，非技能实现。
 variable name. No credential in here; it just matches text against a few patterns and writes JSON.
 
 CodeQL 敏感名启发式误报的最小复现：成对使用，两份除变量名外逐字节相同。此文件不含任何凭据，

@@ -1,7 +1,7 @@
 ---
 name: codeql-local-triage
 slug: codeql-local-triage
-version: 1.0.2
+version: 1.0.3
 displayName: 本地 CodeQL 告警定位与修复验收
 summary: 在本地复现 CodeQL 告警、用变体二分定位 taint 源并验证修复，给出可复现的因果结论。
 homepage: https://github.com/Elisabeth15501/codeql-local-triage
@@ -10,8 +10,9 @@ metadata:
   openclaw:
     requires:
       bins: [python3]
-description: 不替你跑扫描，而是回答「这条 CodeQL 告警为什么报、改哪一行才会消失」——用变体二分给出可复现的因果结论。当用户说「确认 taint 源 / 复现这个 CodeQL 告警 / 为什么 CodeQL 报这个 / 本地跑一次 CodeQL / 验证安全告警是否修好 / 这个告警是不是误报」，或需要判断某个 Code Scanning 告警是真漏洞还是误报时使用。也适用于给任意仓库做单条 CodeQL 查询的本地验收。它**不用于**整库安全审计、不替代 GitHub 原生扫描、也不用于非 CodeQL 类（如 SAST/SCA 商业工具）扫描结果的判定。We don't run the scan for you. Instead we answer "why did CodeQL flag this, and which line must change for it to stop" — variant bisection yields a reproducible causal conclusion. Use this when asked to confirm a taint source, to triage whether an alert is a false positive, or to validate a security alert fix locally. It is NOT for whole-repo security audits, replacing GitHub's native scanning, or triaging non-CodeQL scanners (SAST/SCA vendors). 关键词／keywords：CodeQL、Code Scanning、taint source、数据流、SARIF、codeFlows、误报、false positive、py/clear-text-storage-sensitive-data、CWE-312。
+description: 不替你跑扫描，而是回答「这条 CodeQL 告警为什么报、改哪一行才会消失」——用变体二分给出可复现的因果结论。当用户说「确认 taint 源 / 复现这个 CodeQL 告警 / 为什么 CodeQL 报这个 / 本地跑一次 CodeQL / 验证安全告警是否修好 / 这个告警是不是误报」，或需要判断某个 Code Scanning 告警是真漏洞还是误报时使用。也适用于给任意仓库做单条 CodeQL 查询的本地验收。它**不做整库告警的批量判定与处置**（不替代 Code Scanning suite、不替你 dismiss / 关闭告警）；预筛脚本可对你指定的文件/目录做敏感名清点，但**不产出审计报告**。We don't run the scan for you. Instead we answer "why did CodeQL flag this, and which line must change for it to stop" — variant bisection yields a reproducible causal conclusion. Use this when asked to confirm a taint source, to triage whether an alert is a false positive, or to validate a security alert fix locally. It does NOT do whole-repo alert adjudication or bulk dismissal (it does not replace the Code Scanning suite or close alerts for you); the prefilter may enumerate sensitive names in the files/dirs you point it at, but it produces no audit report. 关键词／keywords：CodeQL、Code Scanning、taint source、数据流、SARIF、codeFlows、误报、false positive、py/clear-text-storage-sensitive-data、CWE-312。
 agent_created: true
+permissions: {read:"local source you specify", write:"<tree>/_bisect or --workdir dir", exec:"python3, optional codeql", network:"none"}
 ---
 
 # 本地 CodeQL 告警定位与修复验收
@@ -21,6 +22,21 @@ agent_created: true
 > **This document is bilingual: English first, 中文 follows. Both cover the same content.**
 > 所有示例均为**模拟代码**，不含任何真实项目源码。
 > **All examples are synthetic sample code**; no real project source is included.
+
+## 权限声明 / Permission disclosure
+
+本技能的能力边界一眼可见（机器可读声明见 frontmatter `permissions`）：
+
+| 能力 | 范围 | 说明 |
+|---|---|---|
+| 读 | 你指定的本地源码 | 只读，**不修改**源码 |
+| 写 | `<tree>/_bisect/` 或 `--workdir` 指定目录 | 不写其它位置（见「参数与产物命名」） |
+| 执行 | `python3`；**可选** `codeql` | 列表传参、**不经 shell** |
+| 网络 | 无 | 仅当你手动让 `codeql --download` 拉查询包时才联网 |
+
+> 所有样例数据均为模拟样本（见上「文档/示例说明」）。本技能**不联网、不读凭据、不修改源码**；产物只写到上表目录。默认输出落在仓库内的 `<tree>/_bisect/`（建议加进 `.gitignore`），或你用 `--workdir` 指到仓库外。
+
+> **语言 / Language.** 默认**中英双语**（同一段内容英文在前、中文在后），这是**有意选择**——面向中文用户、去「AI 味」。如需纯英文或纯中文输出，fork 后删除对应半边即可；未来版本可能提供 `--lang {auto,zh,en}` 开关。
 
 > **卖点：两个脚本零依赖 / Zero-dependency selling point.** `scan_sensitive_sources.py`（预筛）与 `read_sarif.py`（读 SARIF）**不装 CodeQL 也能跑**——只有 `bisect_taint.py` 建库时才需要 CodeQL CLI（~400 MB）。Try the triage in seconds; install the CLI only when you want the controlled experiment.
 
@@ -37,13 +53,14 @@ All scripts live in `scripts/` inside this skill directory; `scripts/xxx.py` bel
 > **示例与 fixture 均为刻意构造的模拟样本 / All samples are synthetic by design.**
 > `tests/fixtures/repro/scan.py` 里的 `SECRET_PATTERNS` **不是真凭据**——它只是一组「`sk-…` / `ghp_…` 形状」的**正则 pattern 字符串**，里面**没有任何真实 token 或密钥**（free of any real credential）。
 > 它是为复现「名字命中 CodeQL 名字启发式（`maybeSecret()`）」这一**最小误报**而**故意保留**的：用途是教学与可复现验证，不是任何真实凭据的流转。
-> 下游只把扫描结果落盘到**临时目录**（`bisect_taint.py --workdir` 指定，默认 `/tmp/taint_bisect`），不会写出任何真实凭据。
+> 两份 fixture 的 docstring 首行已显式标注「TEST FIXTURE — NOT THE SKILL IMPLEMENTATION / 测试样本，非技能实现」——`tests/` 目录是本技能的**自测与可执行样本，非主体逻辑**，扫描器若将其误读为技能主实现属误报。
+> 下游只把扫描结果落到 `--workdir` 指定的产物目录（**默认 `<tree>/_bisect`，在仓库内；显式传 `/tmp/taint_bisect` 可挪到系统临时区**），不会写出任何真实凭据。
 
 ## 适用范围与边界 / Scope & boundaries
 
 本技能**不替代**整套 Code Scanning 扫描。它的定位是**单条查询的因果定位**：把一条具体告警的
 source → sink 路径完整复现出来，并回答「为什么报、改哪一行才会消失」。它**不适用于**对整库做
-完整的安全告警排查（那是整套 suite 的职责）。
+完整的安全告警排查（那是整套 Code Scanning **查询集 / query suite** 的职责，与系统服务/计划任务无关）。
 
 **运行期依赖 / Runtime dependencies**：
 
@@ -64,18 +81,14 @@ source → sink 路径完整复现出来，并回答「为什么报、改哪一�
 - 不做 LLM 判读或告警优先级排序——结论来自可复现的对照实验，而非模型主观判断。
 - 不替代 CI：告警的最终 `state` 由 GitHub 自己的扫描决定，本技能只负责在推送前把因果查清楚。
 
+> **步骤①的定位 / Role of step ①.** 预筛脚本 `scan_sensitive_sources.py` 是**服务单条告警定位的前置粗筛**——枚举「哪些变量名可能被 CodeQL 当 sensitive source」以缩小变体范围。它本身**不对任何告警下结论，也不产出审计报告**（只输出候选源清单，可作你关心文件/目录的清点）。把它当成「目录/整仓安全审计器」是误读。
+
 本技能**适用于**：你手上已有一条具体 CodeQL / Code Scanning 告警，想确认它是真漏洞还是误报，
 或想在推送前本地验证修复是否生效。
 
 ## 权限与可用性声明 / Permissions & availability
 
-**最小权限 / Least privilege.** 本技能只做三件事，不越界：
-
-- 读你指定的**本地源码文件**（只读，不修改待查仓库）；
-- 把扫描产物写到你指定的**临时目录**（`bisect_taint.py --workdir`，默认 `/tmp/taint_bisect`），不写项目目录；
-- 执行本地 **`python`** 子进程，以及（仅当真正建库跑查询时）可选的 **`codeql`** 子进程。
-
-它**不联网、不读凭据、不改仓库、不写除临时目录外的任何位置**。所有样例数据均为模拟样本（见上「适用范围与边界」）。
+> 能力边界一览见上方「权限声明」表（机器可读声明在 frontmatter `permissions`）。本节只补**可用性降级路径**：
 
 **可用性降级路径 / Availability fallback.** CodeQL CLI 是**可选依赖**：
 
@@ -128,8 +141,8 @@ One-off ~400 MB download (extractors only; query packs auto-pull on first `analy
 
 ## 3. Build a database + run a single query / 建库 + 跑单条查询
 
-`codeql database create` + `codeql database analyze` 的**精确命令、耗时实测与查询路径语法见 `references/running-codeql-cli.md`**。只跑目标那一条规则，别跑整个 suite。
-`codeql database create` + `codeql database analyze`: **exact commands, measured cost, and query-path syntax in `references/running-codeql-cli.md`**. Run only the one rule you care about, never the whole suite.
+`codeql database create` + `codeql database analyze` 的**精确命令、耗时实测与查询路径语法见 `references/running-codeql-cli.md`**。只跑目标那一条规则，别跑整个 **query suite（查询套件，CodeQL 的查询集合概念，与系统服务/计划任务无关）**。
+`codeql database create` + `codeql database analyze`: **exact commands, measured cost, and query-path syntax in `references/running-codeql-cli.md`**. Run only the one rule you care about, never the whole **query suite** (a CodeQL *query collection* — unrelated to system services or scheduled tasks).
 
 ## 4. Read `codeFlows` from the SARIF (the key step) / 读 SARIF 的 codeFlows（关键一步）
 
@@ -173,6 +186,15 @@ python scripts/bisect_taint.py --source scan.py --tree . \
 ```
 
 ### 参数与产物命名 / Parameters & artifact naming
+
+**写盘范围（固定约定）/ Write scope (fixed contract）：**
+
+| 项 | 值 |
+|---|---|
+| 默认产物目录 | `<tree>/_bisect/`（**在仓库内**；`/tmp/taint_bisect` 只是显式传 `--workdir` 时的示例值，并非默认） |
+| 覆盖行为 | 每次运行 `rmtree` 清空重建（幂等），不会累积旧产物 |
+| 是否改源码 | **否**（只读源码，产出另存） |
+| 建议 | 把 `_bisect/` 加进 `.gitignore`；或 `--workdir` 指到仓库外（如 `/tmp/taint_bisect`） |
 
 - `--workdir <dir>`（可选）：变体目录与产物的落地目录。**不给时默认 `<--tree>/_bisect`**（包根下的 `_bisect/`，已被拷贝时的 ignore 列表排除，不会污染待查仓库）；示例常显式传 `/tmp/taint_bisect` 把它放到系统临时区。
   **覆盖行为**：每次运行会**清空并重建**各变体目录（含其中的 `_db`），所以重复运行是幂等的、不会累积旧产物。

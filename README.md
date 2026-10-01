@@ -200,9 +200,9 @@ Exit codes: `0` clean / `1` candidate sources found — usable directly as a CI 
 
 ### 2. Run a single query / 跑单条查询
 
-Run only the rule you care about — **never** the whole suite (`python-code-scanning.qls` takes tens of minutes).
+Run only the rule you care about — **never** the whole **query suite** (a CodeQL *query collection* — unrelated to system services or scheduled tasks; `python-code-scanning.qls` takes tens of minutes).
 
-只跑目标那一条，**别**跑整个 suite（`python-code-scanning.qls` 要几十分钟）：
+只跑目标那一条，**别**跑整个 **query suite（查询套件，CodeQL 的查询集合概念，与系统服务/计划任务无关）**（`python-code-scanning.qls` 要几十分钟）：
 
 ```bash
 codeql database create  /tmp/db --language=python --source-root=src --overwrite --threads=0

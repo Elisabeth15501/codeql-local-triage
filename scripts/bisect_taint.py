@@ -74,7 +74,8 @@ def _run_codeql(cmd: list[str]) -> int:
     for attempt in (1, 2):
         print(f"  (尝试 {attempt}/2) $ {quoted}", flush=True)
         try:
-            return subprocess.run(cmd, timeout=CODEQL_TIMEOUT).returncode
+            # 列表传参、shell=False、来源为本地受信的 codeql 路径（S5 安全整改）
+            return subprocess.run(cmd, timeout=CODEQL_TIMEOUT, shell=False).returncode
         except subprocess.TimeoutExpired:
             print(f"[warn] codeql 单步超时（>{CODEQL_TIMEOUT}s）"
                   f"{'，重试一次' if attempt == 1 else '，重试仍超时，放弃'}", file=sys.stderr)
