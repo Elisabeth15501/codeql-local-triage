@@ -168,6 +168,22 @@ run without CodeQL.
 > dismiss / which names are not sensitive sources) are collected in **`references/faq.md`**; the
 > purpose of each file under `references/` is in **`references/README.md`**.
 
+### What each step needs / Requirements matrix
+
+| Step | Script | CodeQL CLI? | Network? | Reads | Writes |
+|---|---|---|---|---|---|
+| ① Prefilter | `scan_sensitive_sources.py` | **No** | No | source files | stdout / `--json` |
+| ② Read SARIF | `read_sarif.py` | **No** | No | `.sarif` | stdout / `--expect` assertion |
+| ③ Variant bisection | `bisect_taint.py` | **Yes** (only when it builds a DB) | No¹ | source files | `<tree>/_bisect` (temp DB + SARIF) |
+
+¹ Step ③ only touches the network if you let `database analyze --download` pull the query packs;
+point it at a local `codeql` (`--codeql /path/to/codeql`) and you need neither network nor PATH.
+
+The two zero-dependency steps run on any machine with Python — enough to decide "does it hit the
+name heuristic" and "what does the data flow look like". The full step-by-step tutorial (worked
+example, install, verification, CI gate) lives in **`README.md`**; this file is the agent-facing
+reference.
+
 ## 2. Installing the CodeQL CLI
 
 One-off ~400 MB download (extractors only; query packs auto-pull on first `analyze`). Full steps,

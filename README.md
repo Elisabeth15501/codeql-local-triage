@@ -157,6 +157,8 @@ file, `tests/fixtures/sarif/repro_fixed.sarif`. Two things about this fix are wo
 
 ## Quick start / 快速开始
 
+> 命令的**权威参考与参数契约**（含三步依赖矩阵、退出码、产物命名）见 `SKILL.md`（英文）/ `SKILL.zh.md`（中文）。本节的「快速开始」是给人类读者的实操流程，命令与上面保持一致；要看「为什么这样跑」的完整教程，也回到这两份文件。
+
 ### 0. Install the CodeQL CLI (once, ~15 min) / 安装 CodeQL CLI（一次性，约 15 分钟）
 
 Download the archive for your platform from
@@ -185,6 +187,10 @@ If you only need `scan_sensitive_sources.py` and `read_sarif.py`, **you can skip
 that is enough to run the self-test.
 
 只要 `scan_sensitive_sources.py` 和 `read_sarif.py` 的话，**不装 CodeQL 也能用**（自测就跑得起来）。
+
+> 国内网络下载慢 / 想离线？`references/running-codeql-cli.md` 的 **§5 国内与离线选项** 给了镜像、预建 DB 随附查询包、`--codeql` 免联网免 PATH 等方案；该文件的 §1–§4 是面向新手的「从零安装并验证」完整步骤链。
+>
+> Slow download in your region / want offline? `references/running-codeql-cli.md` **§5 Domestic & offline options** covers mirrors, carrying pre-built DBs + packs, and `--codeql` (no network, no PATH); its §1–§4 is the complete from-scratch install-and-verify chain for beginners.
 
 ### 1. Prefilter / 预筛
 

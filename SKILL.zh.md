@@ -94,6 +94,18 @@ python scripts/bisect_taint.py --source f.py --tree . \
 >
 > 高频问题（基线没复现怎么办 / 复杂改动怎么做变体 / 能不能直接 dismiss / 哪些名字不算敏感源）集中收口在 **`references/faq.md`**；`references/` 下每个文件的用途见 **`references/README.md`**。
 
+### 每一步需要什么 / 需求矩阵
+
+| 步骤 | 脚本 | 需要 CodeQL CLI? | 需要联网? | 读 | 写 |
+|---|---|---|---|---|---|
+| ① 预筛 | `scan_sensitive_sources.py` | **否** | 否 | 源码文件 | stdout / `--json` |
+| ② 读 SARIF | `read_sarif.py` | **否** | 否 | `.sarif` | stdout / `--expect` 断言 |
+| ③ 变体二分 | `bisect_taint.py` | **是**（仅建库跑查询时） | 否¹ | 源码文件 | `<tree>/_bisect`（临时库 + SARIF） |
+
+¹ 第 ③ 步只有让 `database analyze --download` 拉查询包时才联网；指向本机 `codeql`（`--codeql /path/to/codeql`）则既不需联网也不需配 PATH。
+
+两个零依赖步骤只要有 Python 就能跑——足以完成「是否命中名字启发式」「数据流长什么样」两类判定。完整的步步教程（排查示例、安装、验证、CI 门禁）在 **`README.md`**；本文件是给 agent 看的参考。
+
 ## 2. 安装 CodeQL CLI
 
 一次性下载 ~400 MB（只含提取器，查询包首次 `analyze` 时自动拉）。平台包名、校验与最新版本查询的**完整步骤见 `references/running-codeql-cli.md`**。CodeQL CLI 是可选依赖——预筛与读 SARIF 不需要它。
