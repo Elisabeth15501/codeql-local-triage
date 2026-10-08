@@ -1,7 +1,7 @@
 ---
 name: codeql-local-triage
 slug: codeql-local-triage
-version: 1.0.4
+version: 1.0.6
 displayName: 本地 CodeQL 告警定位与修复验收
 summary: 在本地复现 CodeQL 告警、用变体二分定位 taint 源并验证修复，给出可复现的因果结论。
 homepage: https://github.com/Elisabeth15501/codeql-local-triage
@@ -10,333 +10,204 @@ metadata:
   openclaw:
     requires:
       bins: [python3]
-description: Does not run the scan for you. Instead answers "why did CodeQL flag this, and which line must change for it to stop" — variant bisection yields a reproducible causal conclusion. Use when the user says "confirm the taint source / reproduce this CodeQL alert / why does CodeQL flag this / run CodeQL locally / verify a security-alert fix / is this alert a false positive", or needs to judge whether a Code Scanning alert is a real vulnerability or a false positive. Also fits local acceptance of any single CodeQL query against an arbitrary repo. It does NOT do whole-repo alert adjudication or bulk dismissal (it does not replace the Code Scanning suite or close alerts for you); the prefilter may enumerate sensitive names in the files/dirs you point it at, but it produces no audit report. Keywords — CodeQL, Code Scanning, taint source, data flow, SARIF, codeFlows, false positive, py/clear-text-storage-sensitive-data, CWE-312.
+description: Answers "why did CodeQL flag this, and which line must change for it to stop" — reproducible causal triage of ONE specific alert via variant bisection. Triggers on "确认 taint 源 / 复现这个 CodeQL 告警 / 为什么 CodeQL 报这个 / CodeQL 误报 / 这个告警是不是误报 / 本地跑 CodeQL / 验证安全告警是否修好 / confirm the taint source / why does CodeQL flag this / is this alert a false positive / reproduce this CodeQL alert / verify a security-alert fix", or when handed a .sarif file and asked where the taint starts. NOT for whole-repo alert audits or bulk dismissal — it never closes alerts for you and never replaces the Code Scanning suite. NOT for Java/JS/Go (Python only today). The prefilter lists candidate sensitive NAMES in files/dirs you point at; it draws no conclusion and produces no audit report. Keywords — CodeQL, Code Scanning, taint source, data flow, SARIF, codeFlows, false positive, py/clear-text-storage-sensitive-data, CWE-312.
+when_to_use: Use when the user already holds ONE concrete alert (a GitHub Code Scanning alert, a rule id + file + line, or a .sarif file) and asks where the taint comes from, whether it is a false positive, or whether a fix works. Do NOT use for — bulk or whole-repo alert triage and ranking, closing or dismissing alerts, non-Python languages, rules outside the name-heuristic family, or general "is my repo secure" questions.
+allowed-tools: [Read, Grep, Glob, Bash]
+disable-model-invocation: false
+user-invocable: true
+context: fork
 agent_created: true
 permissions: {read:"local source you specify", write:"<tree>/_bisect or --workdir dir", exec:"python3, optional codeql", network:"none"}
 ---
 
 # Local CodeQL alert triage and fix verification
 
-> **This document is English-only.** A complete Chinese translation is maintained side-by-side as
-> `SKILL.zh.md` in this directory — read that if you prefer Chinese.
-> All examples are synthetic sample code; no real project source is included.
+> **This file is the single-language agent entry point.** A complete, equally authoritative Chinese
+> rendering of the same content is `SKILL.zh.md`, mirrored on purpose; both are equally subject to
+> security scanning. All examples are synthetic fixtures — no real project source is included.
+>
+> **Layering (progressive disclosure)**: this file carries only what you need *every turn* (§0 hard
+> constraints, §1 the single-run flow). Everything else lives in `references/` — read it **on demand**,
+> not up front.
 
-## Permission disclosure
+---
 
-The capability boundary of this skill is visible at a glance (machine-readable declaration in the
-frontmatter `permissions` field):
+## §0. HARD CONSTRAINTS — re-read these every turn, even after context compression
+
+These are not suggestions. If context was compressed or this skill was reloaded mid-task, **re-read
+this section before taking any action**. It is deliberately first and compact for that reason.
+
+| # | Constraint | Why it exists |
+|---|---|---|
+| **H1** | **Change exactly ONE thing per variant.** Two differences between `t1_control` and a variant voids the whole experiment. | The verdict *is* the attribution. A multi-variable diff cannot be attributed. Guarded by `tests/run_tests.py` (strict byte-comparison of the two fixtures). |
+| **H2** | **`t1_control` must reproduce the alert, or stop.** If it reports 0 results, local and remote disagree and **every later verdict is invalid** (script exits `1`). | A conclusion on a non-reproducing baseline is a building on sand. Fix the version mismatch first. |
+| **H3** | **Never dismiss, suppress, or close an alert.** No `# lgtm`, no `dismiss` API. The fix is a **rename**, never a suppression comment. | Only GitHub's own scan may change alert `state`. A suppression hides the next real one. |
+| **H4** | **Never judge an alert by "it looks wrong".** "Feels like a false positive" is not evidence; run the experiment. | Steps ①② give the path; step ③ makes the verdict reproducible instead of guessed. |
+| **H5** | **Never modify the user's source.** Read-only. All artifacts go to `<tree>/_bisect/` (or `--workdir`). Each run `rmtree`s and rebuilds, so repeated runs are idempotent. | The user pushes the fix themselves. Keep the skill's write surface auditable. |
+| **H6** | **Never claim the alert is closed.** Only `state` changing, or the alert position moving, proves a rescan — **not** `updated_at` (it refreshes only on state change). | Reporting a false "closed" is worse than reporting nothing. |
+| **H7** | **Never treat exit code `2` as "clean".** `2` means input/runtime error (missing path, malformed SARIF, bad `--variant`, `codeql` timeout). Only `0` is clean. | The most dangerous misjudgement: a typo'd path silently reading as "no findings". Fixed in v1.0.2. |
+| **H8** | **No network.** Never fetch anything. If CodeQL query packs are missing, say so — the user decides, and steps ①② still work. | Nothing here needs the internet; `--codeql /abs/path` runs fully offline. |
+| **H9** | **Pass the user's language to every script.** Determine the language of the user's latest message and pass `--lang zh` or `--lang en` (or export `AGENT_UI_LANG`). Never rely on bilingual output. | Scripts emit exactly one language by design; mixed output risks a natural-language policy violation. |
+| **H10** | **One language per run; never re-read this file across turns to "refresh".** Everything needed for a single triage is in §0 + §1. | Prevents the common failure of an agent looping back to re-read the skill mid-task. |
+
+### Capability boundary
 
 | Capability | Scope | Notes |
 |---|---|---|
-| Read | local source you specify | read-only, never modified |
-| Write | `<tree>/_bisect/` or the `--workdir` directory | nothing else is written (see "Parameters & artifact naming") |
+| Read | local source you specify | read-only, never modified (H5) |
+| Write | `<tree>/_bisect/` or `--workdir` | nothing else, ever |
 | Execute | `python3`; **optional** `codeql` | argument list, **no shell** |
-| Network | none | only if you manually let `codeql --download` fetch query packs |
+| Network | **none** | `allowed-tools` excludes WebFetch/WebSearch (H8) |
 
-> All sample data are synthetic fixtures (see "Examples & fixtures" below). This skill **touches no
-> network, reads no credentials, and modifies no source**; artifacts are written only to the
-> directories in the table above. Output lands by default inside the repo at `<tree>/_bisect/`
-> (add it to `.gitignore`), or you point `--workdir` outside the repo.
+### Exit-code contract — the single source of truth for every verdict
 
-> **Language policy.** This skill ships as two parallel files: `SKILL.md` (English, the canonical
-> definition agents load) and `SKILL.zh.md` (Chinese). Both carry identical content. This split is
-> an intentional choice for Chinese-platform users who want a clean monolingual read. No `--lang`
-> switch is provided; to change language, read the other file.
+| Code | Meaning | CI treats as |
+|---|---|---|
+| `0` | success / no candidate source / assertion passed | ✅ pass |
+| `1` | candidate source found, **or** baseline not reproduced (**a verdict**) | ❌ fail |
+| `2` | input / runtime error — path missing, malformed SARIF, bad args, `codeql` failed or timed out | ❌ **fail** (never "pass") |
 
-> **Zero-dependency selling point.** `scan_sensitive_sources.py` (prefilter) and `read_sarif.py`
-> (SARIF reader) run **without CodeQL installed** — only `bisect_taint.py` needs the CodeQL CLI
-> (~400 MB) when it actually builds a database. Try the triage in seconds; install the CLI only
-> when you want the controlled experiment.
+### Execution model & timeouts (read before assuming a hang)
 
-GitHub's alert page **gives you no data flow** (it only marks the sink), remote scans take minutes,
-and you cannot run a controlled experiment there. Running a single query locally plus variant
-bisection gives you a **reproducible causal conclusion** in about ten minutes.
+- Steps ①② are **pure parsers that spawn no subprocess at all** — `scan_sensitive_sources.py` uses only
+  `ast` + `re`, `read_sarif.py` only `json`. Their runtime scales with input size; they cannot hang on
+  an external process.
+- The **only** long-running subprocess is `bisect_taint.py` invoking `codeql`: **1800 s per-step
+  timeout + one automatic retry**; on repeated timeout it returns `124`, converted to exit `2` with a
+  `[warn]`.
 
-All scripts live in `scripts/` inside this skill directory; `scripts/xxx.py` below refers to them.
+---
 
-> **Examples & fixtures are synthetic by design.** The `SECRET_PATTERNS` in
-> `tests/fixtures/repro/scan.py` is **not a real credential** — it is just a set of regex *pattern
-> strings* shaped like `sk-…` / `ghp_…`, containing **no real token or key** (free of any real
-> credential). It is deliberately kept to reproduce the minimal false positive of "a name hitting
-> CodeQL's name heuristic (`maybeSecret()`)": its purpose is teaching and reproducible verification,
-> not the flow of any real secret. The docstring first line of both fixtures is explicitly labelled
-> "TEST FIXTURE — NOT THE SKILL IMPLEMENTATION" — the `tests/` directory is this skill's **self-test
-> and executable sample, not the main logic**; a scanner that misreads it as the skill
-> implementation is a false positive. Downstream writes scan results only to the artifact directory
-> specified by `--workdir` (**default `<tree>/_bisect`, inside the repo; pass `/tmp/taint_bisect`
-> explicitly to move it to the system temp area**), and never writes any real credential.
+## §1. SINGLE-RUN FLOW — five steps, closable in one turn
 
-## Scope & boundaries
+Each step states **input → command → output → fallback**. Follow in order; do not re-read other files
+to finish a step. Steps ①② need **no CodeQL install and no network** (domestic / air-gapped users:
+this is the whole job — see `references/running-codeql-cli.md` §5 only if you need step ③).
 
-This skill does **not replace** the whole Code Scanning suite. Its positioning is **causal triage of
-a single query**: reproduce the full source → sink path of one specific alert and answer "why does
-it fire, and which line must change for it to stop". It is **not for** auditing an entire repo's
-security alerts end-to-end (that is the job of the full Code Scanning **query suite** — a CodeQL
-*query collection* concept, unrelated to system services or scheduled tasks).
+### Step 1 — Prefilter (optional but cheap; skips a ~9-minute DB build)
 
-**Runtime dependencies:**
+- **Input**: the file(s) or directory holding the alert; ideally the rule id.
+- **Run**: `python scripts/scan_sensitive_sources.py <src> [--summary] [--jobs N]`
+- **Output**: per candidate source — class, line, matched label; exit `0`/`1`/`2` per the contract.
+- **Fallback**: exit `2` → the path is wrong or unparseable; **fix the input, do not proceed** (H7).
+  It is a *name* inventory, **not a verdict** — it draws no conclusion about the alert.
 
-- The three scripts are executed by `python` / `python3` (declared in frontmatter
-  `metadata.openclaw.requires.bins`).
-- **The CodeQL CLI is an optional dependency**: only needed when `bisect_taint.py` actually builds a
-  database and runs a query; the prefilter (`scan_sensitive_sources.py`) and the SARIF reader
-  (`read_sarif.py`) are **zero-dependency** and run without CodeQL.
+### Step 2 — Read the SARIF (this is usually where the answer is)
 
-**Currently focused:**
+- **Input**: a `.sarif` file — from the user's CI artifact, or from `codeql database analyze
+  --format=sarif-latest`.
+- **Run**: `python scripts/read_sarif.py <file.sarif> [--paths-only | --json | --expect N]`
+- **Output**: the complete `SOURCE → … → SINK` path with line numbers and node semantics, plus the
+  result count (`0` = clean).
+- **Fallback**: malformed file → the script names the exact line/column and rejects non-SARIF input,
+  exit `2`. **Never read a parse failure as "0 results"** (H7).
 
-- **Language**: Python (the prefilter `scan_sensitive_sources.py` only covers `py/*` queries;
-  `read_sarif.py` and `bisect_taint.py` are language-agnostic). The **multi-language roadmap**
-  (equivalent prefilter + variant bisection for Java / JavaScript / Go) is future work, not current
-  capability.
-- **Rule**: the main battleground is `py/clear-text-storage-sensitive-data` (CWE-312, a name-heuristic
-  false positive) — because its source judgement looks at the **name, not the content**, it is the
-  most amenable to disproof by variant bisection.
+### Step 3 — Stage the variants (still no CodeQL required)
 
-**Out of scope:**
+- **Input**: the suspect name(s) and the proposed replacement(s).
+- **Run**: `python scripts/bisect_taint.py --source <f.py> --tree <dir> --dry-run --variant t2=A:B`
+- **Output**: the staged variant tree and the count of replacements; prints an equivalent
+  build/analyze command template.
+- **Fallback**: bad `--variant` format is rejected with a concrete message plus an example (exit `2`).
+  For changes a literal replace cannot express, use `--variant-file t3=/path/t3.py`.
 
-- No LLM judgement or alert prioritisation — conclusions come from a reproducible controlled
-  experiment, not model intuition.
-- No CI replacement: the alert's final `state` is decided by GitHub's own scan; this skill only
-  clarifies the causality before you push.
+### Step 4 — Run the controlled experiment (needs the CodeQL CLI)
 
-> **Role of step ①.** The prefilter `scan_sensitive_sources.py` is a **pre-triage coarse scan that
-> serves single-alert triage** — it enumerates "which variable names CodeQL might treat as sensitive
-> sources" to narrow the variant space. It itself **draws no conclusion about any alert and produces
-> no audit report** (it only outputs a candidate-source list, usable as an inventory of files/dirs
-> you care about). Treating it as a "directory / whole-repo security auditor" is a misreading.
+- **Input**: staged variants + `--codeql /abs/path/to/codeql` (a local install — no PATH needed).
+- **Run**: same command **without** `--dry-run`.
+- **Output**: a verdict table. `t1_control` > 0 ⇒ valid; `t2` = 0 ⇒ **that change is the taint source**;
+  `t2` still fires ⇒ it is **not**.
+- **Fallback**: `t1_control` = 0 ⇒ **STOP** (H2). Do not read any other row as meaningful; align the
+  CodeQL version/query pack first. `codeql` missing or timing out ⇒ exit `2`; steps ①② remain valid.
 
-This skill **applies when**: you already have a specific CodeQL / Code Scanning alert and want to
-confirm whether it is a real vulnerability or a false positive, or you want to verify locally
-whether a fix works before pushing.
+### Step 5 — Deliver the conclusion + acceptance
 
-## Permissions & availability
+- **Output** (all four, or the answer is incomplete):
+  1. **The taint source**, as `name:line` with the class and why it matched.
+  2. **The minimal change** — usually a rename, zero behavioural change.
+  3. **The evidence** — measured result counts per variant (not a prediction).
+  4. **Post-fix acceptance**: prefilter → 0 sources; `read_sarif.py --expect 0` returns `0`; a
+     comment saying **"do not rename this back"** + the rule that caused it.
+- **Fallback**: you cannot reach step 4 ⇒ **say so explicitly** and deliver steps ①② only, labelled
+  as *not yet proven*. Do not let an unproven conclusion read as verified (H4).
 
-> See the "Permission disclosure" table above for the capability boundary (machine-readable
-> declaration in frontmatter `permissions`). This section only adds the **availability fallback
-> path**:
+---
 
-**Availability fallback.** The CodeQL CLI is an **optional dependency**:
+## §2. Why this approach (context, not instructions)
 
-- If the CodeQL CLI is temporarily unavailable due to network or environment, the two steps
-  `scan_sensitive_sources.py` (prefilter) and `read_sarif.py` (SARIF reader) remain **zero-dependency
-  usable**, sufficient to decide "does it hit the name heuristic" and "what does the data flow look
-  like";
-- `bisect_taint.py` does not force a network download — you can point it directly at a locally
-  installed `codeql` executable (`--codeql /path/to/codeql`), running the controlled experiment with
-  no extra network configuration.
+GitHub's alert page **gives you no data flow** — it marks the sink line and nothing about where the
+taint came from. Remote scans take minutes and offer no controlled experiment. Running one query
+locally plus variant bisection yields a **reproducible causal conclusion** in ~10 minutes.
 
-In other words, **the core judgement does not depend on one large overseas download**; the CLI is
-merely an enhancement that pushes the "reproducible causal conclusion" from two steps to three.
+**Scope**: causal triage of **one** alert — "why does it fire, which line must change". It is **not**
+whole-repo alert adjudication (that is the Code Scanning **query suite** — a CodeQL *query collection*
+concept, unrelated to system services or scheduled tasks), and it does **not** rank alerts by model
+intuition. Conclusions come from a measured experiment — that is what keeps them auditable.
 
-## Related skills & tradeoffs
+**Currently focused**: **Python** (`scan_sensitive_sources.py` covers `py/*` only; the other two
+scripts are language-agnostic) and the **name-heuristic** family, chief among them
+`py/clear-text-storage-sensitive-data` (CWE-312) — chosen because its source judgement reads the
+**name, not the content**, making it the most amenable to disproof. Java / JS / Go are roadmap, not
+current capability.
 
-**Division of labour.** This skill does **local causal triage** only. To *manage* alerts on GitHub
-(list / change state / bulk-handle Code Scanning alerts), use GitHub's official alert-management
-capability (e.g. `github-security-codescanning-alerts-skill` or `gh api code-scanning`); the two are
-complementary, not competing.
+**Division of labour**: to *manage* alerts on GitHub (list / change state / bulk-handle), use GitHub's
+official alert-management capability or `gh api code-scanning`. Complementary, not competing.
 
-**"No LLM judgement" is a tradeoff, not a gap.** Conclusions come from a **reproducible controlled
-experiment** (variant bisection + measured data flow), not model intuition — which keeps them
-auditable. If you specifically need *semantic triage / prioritisation* (LLM-based), look at skills
-like `li-codeql-llm`; this skill deliberately stops at the mechanical layer.
+### Four facts that change the verdict
 
-## 0. When to use
+1. **"Variant bisection" ≠ Trail of Bits' `variant-analysis`.** This locates the cause of **one** alert
+   by controlled experiment; `variant-analysis` sweeps other projects for the same bug. Opposite goals.
+2. **Guess from the QL source is unreliable, and being wrong first is normal.** A `base64` decode, a
+   `json.dumps` or an f-string on the path all look like plausible sources. Run the experiment first (H4).
+3. **Which names are *not* sensitive** — `[REDACTED_SECRET]`-style placeholders (the exclusion regex
+   contains `redact`), plus `id` and `certificate`, which CWE-312 explicitly excludes. See
+   `references/sensitive-data-heuristics.md`.
+4. **Artifact naming** — variant dir `workdir/<NAME>/` · DB `workdir/<NAME>/_db` · SARIF
+   `workdir/<NAME>.sarif` (sibling, not inside) · verdict table to stdout only, never persisted. Add
+   `_bisect/` to `.gitignore` or pass `--workdir` outside the repo.
 
-- An alert "makes no sense" or "still fires after I fixed it"
-- You must tell a **real vulnerability** from a **false positive** (especially name-heuristic rules)
-- You want to prove/disprove a fix locally before pushing, instead of waiting for CI
-- You need to know whether this alert was introduced by *your* change
+### Common pitfalls (read when a step behaves unexpectedly)
 
-## 1. The three commands
+- Alert line numbers drift as you edit; only `most_recent_instance.location` reflects the latest scan.
+- Compiled languages need a build before `database create`; **Python does not**.
+- **Concurrent edits desynchronise the conclusion** — cross-check mtime against build time
+  (`ls --time-style=full-iso`) before trusting a whole-repo build.
+- `git archive HEAD` reads the `.gitattributes` **in the HEAD tree**; for an untracked file
+  `export-ignore` silently does nothing. Verify with `git check-attr export-ignore -- <path>`.
+- Editing the prefilter's regex port: QL allows variable-width lookbehind, Python's `re` does not —
+  rewrite `(?<!is|is_)` as `(?<!is)(?<!is_)` in series, and pass inline flags to `re.compile` rather than
+  mid-expression. Re-run `python scripts/scan_sensitive_sources.py --self-test` after any such change.
 
-```bash
-python scripts/scan_sensitive_sources.py <src>   # 1. prefilter, saves a 9-min DB build
-python scripts/read_sarif.py <out.sarif>         # 2. print the full source→sink path
-python scripts/bisect_taint.py --source f.py --tree . \
-    --variant t2=OLD:NEW --codeql <codeql>       # 3. change one thing at a time
-```
+**Full answers** to the four most common questions (baseline not reproduced · complex change · may I
+dismiss · which names aren't sensitive) are in **`references/faq.md`** — read it only when you hit one.
 
-All three have `--help`. `scan_sensitive_sources.py` and `read_sarif.py` are **zero-dependency** and
-run without CodeQL.
+---
 
-> **Exit-code contract.** All three scripts agree: `0` = success / no candidate source found; `1` =
-> candidate source found or baseline not reproduced (**a verdict**, usable as a CI gate); `2` = input
-> / runtime error (path missing, `codeql` call failed, timeout, etc., needs investigation). A missing
-> path is **never** misjudged as "clean" — this is the regression fixed in v1.0.2.
->
-> Frequently asked questions (baseline not reproduced / how to variant a complex change / can I just
-> dismiss / which names are not sensitive sources) are collected in **`references/faq.md`**; the
-> purpose of each file under `references/` is in **`references/README.md`**.
+## §3. References — read on demand, not up front
 
-### What each step needs / Requirements matrix
-
-| Step | Script | CodeQL CLI? | Network? | Reads | Writes |
-|---|---|---|---|---|---|
-| ① Prefilter | `scan_sensitive_sources.py` | **No** | No | source files | stdout / `--json` |
-| ② Read SARIF | `read_sarif.py` | **No** | No | `.sarif` | stdout / `--expect` assertion |
-| ③ Variant bisection | `bisect_taint.py` | **Yes** (only when it builds a DB) | No¹ | source files | `<tree>/_bisect` (temp DB + SARIF) |
-
-¹ Step ③ only touches the network if you let `database analyze --download` pull the query packs;
-point it at a local `codeql` (`--codeql /path/to/codeql`) and you need neither network nor PATH.
-
-The two zero-dependency steps run on any machine with Python — enough to decide "does it hit the
-name heuristic" and "what does the data flow look like". The full step-by-step tutorial (worked
-example, install, verification, CI gate) lives in **`README.md`**; this file is the agent-facing
-reference.
-
-## 2. Installing the CodeQL CLI
-
-One-off ~400 MB download (extractors only; query packs auto-pull on first `analyze`). Full steps,
-platform zips, validation and "latest version" lookup: **`references/running-codeql-cli.md`**. The
-CLI is optional — the prefilter and SARIF reader do not need it.
-
-## 3. Build a database + run a single query
-
-`codeql database create` + `codeql database analyze`: **exact commands, measured cost, and
-query-path syntax in `references/running-codeql-cli.md`**. Run only the one rule you care about,
-never the whole **query suite** (a CodeQL *query collection* — unrelated to system services or
-scheduled tasks).
-
-## 4. Read `codeFlows` from the SARIF (the key step)
-
-```bash
-python scripts/read_sarif.py "$T/out.sarif"              # full path
-python scripts/read_sarif.py "$T/out.sarif" --json       # machine-readable
-python scripts/read_sarif.py "$T/out.sarif" --expect 0   # assert zero, CI-friendly
-```
-
-`codeFlows[].threadFlows[].locations[]` **is** the complete source → … → sink path, with the line
-number and node semantics of every step. `results` count = 0 means "clean" — the most direct
-acceptance signal there is.
-
-> Do not use the SARIF file size, and do not stop at the sink line — that is information you already
-> had on the GitHub page, and it adds nothing.
-
-## 5. Variant bisection: find out which step is responsible
-
-Change exactly one thing at a time, rebuild each variant, rerun the same query, and see whether the
-alert disappears.
-
-> **"Variant bisection" ≠ Trail of Bits' `variant-analysis`.** Our **variant bisection** locates the
-> *cause* of **one** alert by a controlled experiment (attribution / root-cause); `variant-analysis`
-> finds *other instances* of the same bug across codebases (a sweep). Opposite goals — don't mix them
-> up.
-
-```bash
-# Inspect the change without building anything
-python scripts/bisect_taint.py --source scan.py --tree . --dry-run \
-    --variant t2_rename=SECRET_PATTERNS:CREDENTIAL_PATTERNS
-
-# Full run: stage + build + analyse + verdict table
-python scripts/bisect_taint.py --source scan.py --tree . \
-    --variant t2_rename=SECRET_PATTERNS:CREDENTIAL_PATTERNS \
-    --codeql /path/to/codeql --workdir /tmp/taint_bisect
-```
-
-### Parameters & artifact naming
-
-**Write scope (fixed contract):**
-
-| Item | Value |
+| File | Read it when |
 |---|---|
-| Default artifact dir | `<tree>/_bisect/` (**inside the repo**; `/tmp/taint_bisect` is only the example value when you explicitly pass `--workdir`, not the default) |
-| Overwrite behaviour | each run `rmtree`s and rebuilds (idempotent), no stale artifacts accumulate |
-| Modifies source? | **No** (source is read-only, output saved separately) |
-| Recommendation | add `_bisect/` to `.gitignore`; or point `--workdir` outside the repo (e.g. `/tmp/taint_bisect`) |
+| `references/README.md` | index of `references/`, plus a "how to read" table keyed to your current goal |
+| `references/faq.md` | baseline not reproduced · complex change · may I dismiss · which names aren't sensitive |
+| `references/running-codeql-cli.md` | step ③ needs CodeQL: full install chain (§1–§4); **§5** mirrors, pre-built DBs, fully offline |
+| `references/sensitive-data-heuristics.md` | you need the 5 regex groups, the exclusion regex, or the 7 source categories |
+| `references/ci-integration.md` | turning "result count must be 0" into a CI gate (GitHub Actions / GitLab CI) |
+| `README.md` | the full human-facing tutorial: worked example, install, verification, CI |
 
-- `--workdir <dir>` (optional): where variant directories and artifacts land. **When omitted,
-  defaults to `<--tree>/_bisect`** (the `_bisect/` under the package root, already excluded by the
-  ignore list at copy time, so it never pollutes the repo under investigation); examples often pass
-  `/tmp/taint_bisect` explicitly to put it in the system temp area.
-  **Overwrite behaviour**: each run **clears and rebuilds** every variant directory (including the
-  `_db` inside), so repeated runs are idempotent and never accumulate stale artifacts.
-- `--codeql <path>` (optional): points at a locally installed `codeql` executable. **If omitted, only
-  variants are generated, no query is run** (exit code 0, prints an equivalent build/analyze command
-  template), handy for checking the change with `--dry-run` first.
-- Artifact naming rules:
-  - Variant directory: `workdir/<NAME>/` (e.g. `workdir/t1_control/`, `workdir/t2_rename/`)
-  - Per-variant database: `workdir/<NAME>/_db`
-  - Per-variant SARIF: `workdir/<NAME>.sarif` (**sibling of the variant directory, same name with a
-    `.sarif` suffix, not inside it**)
-  - Verdict table: printed to stdout only, not persisted
+### Worked example (measured, not predicted)
 
-When a change is too complex for a literal replacement (regex surgery), produce the edited file by
-hand and swap the whole file in: `--variant-file t3=/tmp/t3.py`.
+`tests/fixtures/repro/scan.py` is a 25-line synthetic file that stores **no credential** — it holds a
+list of regex *pattern strings* shaped like `sk-…` / `ghp_…`, kept to reproduce the minimal name-heuristic
+false positive. Its measured SARIF is checked in at `tests/fixtures/sarif/repro.sarif` (1 result) and
+`repro_fixed.sarif` (0 results), so **every command below runs without installing CodeQL**.
 
-| Variant | Meaning | How to read it |
-| --- | --- | --- |
-| `t1_control` (added automatically) | unchanged | **must reproduce**; if it does not, local and remote disagree and every conclusion is invalid (the script exits 1) |
-| `t2_xxx` | suspect A removed | 0 results ⇒ A is the cause |
-| `t3_xxx` | suspect B removed | still fires ⇒ B is **not** the cause |
+| Variant | Change | Results | Verdict |
+|---|---|---|---|
+| `t1_control` | none (auto-added) | 1 | baseline reproduces ✅ |
+| `t2_rename` | `SECRET_PATTERNS` → `CREDENTIAL_PATTERNS` | **0** | ✅ this name is the cause |
+| `t3_xxx`, `t4_xxx` … | suspects you add | — | 0 ⇒ that change is the cause; >0 ⇒ it is not |
 
-> Lesson: reading the QL source and *inferring* the cause is unreliable. Guessing wrong on the first
-> hypothesis is normal — a `base64` decode, a `json.dumps` or an f-string on the path all look like
-> plausible sources until you test them. **Run the controlled experiment before you write down the
-> conclusion.**
-
-## 6. Name-heuristic rules (the most common false-positive source in Python security queries)
-
-Rules such as `py/clear-text-storage-sensitive-data` pick their source **by name, never by content**.
-
-**Cheat sheet: `references/sensitive-data-heuristics.md`** (5 regex groups, the exclusion regex,
-7 source categories, the source/sink special cases of CWE-312). The three things to remember:
-
-1. `maybeSecret()` = `(?is).*((?<!is|is_)secret|(?<!un|un_|is|is_)trusted(?!_iter)|confidential).*`
-   — a `secret` substring anywhere in the name is enough; the word in front of it grants no exemption
-   (unless it is exactly `is` / `is_`).
-2. **`"[REDACTED_SECRET]"`-style placeholders are not sensitive** (the exclusion regex contains
-   `redact`). So redacting a field is a valid fix — **do not go hunting for placeholders as sources**.
-3. CWE-312 only treats `secret` / `password` / `private` as sources; **`id` and `certificate` are
-   explicitly excluded** (`CleartextStorageCustomizations.qll`). The sink is "data written to a file"
-   (`FileSystemWriteAccess.getADataNode()`).
-
-**Therefore: any variable whose name *looks like* a key, as soon as it flows into a "write file / write
-log" sink, will fire.** The usual fix is a **rename** (zero behavioural change) — not a suppression
-comment, and definitely not a dismissal.
-
-## 7. Post-fix acceptance checklist
-
-1. Prefilter: `scripts/scan_sensitive_sources.py <file>` drops to zero sources
-2. Functional regression: only a name changed, so **the tool's behaviour must not change** (run its
-   fixtures, including exit-code semantics)
-3. Real CodeQL over the tree: the target query returns **0 results** (`read_sarif.py --expect 0`)
-4. Leave a comment at the source saying **"do not rename this back"** plus the rule that caused it —
-   otherwise the next person will helpfully revert it
-5. Once pushed, **let GitHub's own scan close the alert**: wait for the CodeQL workflow and check
-   whether the alert closed. Do **not** use `code-scanning/alerts/<n> --jq .updated_at` to decide
-   whether a rescan happened — that field only refreshes when the state changes, so a stale timestamp
-   proves nothing. The only valid signals are `state` or whether the position moved.
-
-## 8. Two pitfalls when porting QL regexes to Python `re`
-
-The prefilter is an "equivalent port"; when you touch it you will hit these:
-
-1. QL supports **variable-width lookbehind**: `(?<!is|is_)` raises
-   `PatternError: look-behind requires fixed-width pattern` in Python. Rewrite it as **several
-   fixed-width assertions in series**: `(?<!is)(?<!is_)` (all must pass for the exclusion to apply).
-2. **An inline `(?is)` cannot appear mid-expression** (`global flags not at the start of the
-   expression`). Pass the flags to `re.compile(pattern, re.I | re.S)`; when one regex has branches
-   with different flags, split them into separate patterns and take the union.
-
-After any change, run `python scripts/scan_sensitive_sources.py --self-test` to confirm the classifier
-still agrees with the QL definitions.
-
-## 9. Common pitfalls
-
-- Alert line numbers drift as you edit; only `most_recent_instance.location` reflects the latest scan
-- CMake / compiled languages need a build before `database create`; **Python does not**
-- Before a whole-repo build, make sure no **concurrent edits** are happening (another process writing
-  files will desynchronise your conclusion). Cross-check mtime against the build time with
-  `ls --time-style=full-iso`.
-- A variant must change **exactly one thing**. If two fixture/variant copies differ in anything else,
-  the experiment is void (`tests/run_tests.py` has an assertion guarding exactly this).
-- `git archive HEAD` only reads the `.gitattributes` **in the HEAD tree**; if the file is untracked,
-  `export-ignore` silently does nothing. Verify with `git archive HEAD | tar -t | grep <path>` (expect
-  no output) and `git check-attr export-ignore -- <path>` (expect `export-ignore: set`).
-
-## 10. Further reading
-
-- **`references/README.md`** — index of the `references/` directory: the purpose and use case of each file.
-- **`references/faq.md`** — frequently asked questions in one place: baseline not reproduced, how to variant a complex change, can I just dismiss, which names are not sensitive sources.
-- **`references/running-codeql-cli.md`** — full step chain to install / verify the CodeQL CLI (needed by step ③ `bisect_taint.py`).
-- **`references/sensitive-data-heuristics.md`** — quick reference on name-heuristic rule principles (7 positive source categories + the exclusion regex).
+The fix is a rename: no behaviour change, no public API move, and the alert cannot come back. Both
+fixture docstrings are labelled "TEST FIXTURE — NOT THE SKILL IMPLEMENTATION" — `tests/` is the
+self-test and executable sample, **not** the main logic; a scanner misreading it as the implementation
+is a false positive.

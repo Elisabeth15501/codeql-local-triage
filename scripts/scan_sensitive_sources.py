@@ -65,6 +65,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from i18n import resolve_lang, tr, set_lang  # noqa: E402
+
 I, S = re.IGNORECASE, re.DOTALL
 
 # ---- 正则：逐字抄自 SensitiveDataHeuristics.qll（已抽出内联 flag）-------------
@@ -206,7 +209,7 @@ def iter_py_files(paths: list[str]) -> tuple[list[Path], list[Path]]:
         elif p.is_file():
             out.append(p)
         else:
-            print(f"[warn] 路径不存在，跳过: {p}", file=sys.stderr)
+            print(tr("warn_skip_missing", p=p), file=sys.stderr)
             missing.append(p)
     return out, missing
 
@@ -235,80 +238,102 @@ def self_test() -> int:
         got = classify(name)
         ok = got == want
         bad += not ok
-        print(f"  {'ok  ' if ok else 'FAIL'}  {name:22s} -> {got!r}"
+        print(f"  {tr('ok_label') if ok else tr('fail_label')}  {name:22s} -> {got!r}"
               + ("" if ok else f"   期望 {want!r}"))
-    print(f"\n自检: {'全部通过' if not bad else f'{bad} 项失败'}")
+    print(tr("selftest_all") if not bad else tr("selftest_some", bad=bad))
     return 1 if bad else 0
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Prefilter without a DB build: list Python names that may drive a CodeQL taint "
-                    "flow. / 免建库预筛：枚举 Python 文件里可能驱动 CodeQL taint 的敏感名。",
+        description=tr("scan_desc"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Exit codes / 退出码: 0 = 未发现候选源; 1 = 发现候选源; "
-               "2 = 输入/运行错误（路径不存在等）。")
-    ap.add_argument("paths", nargs="*",
-                    help=".py files or directories to scan (directories recurse) / "
-                         "待扫的 .py 文件或目录（目录会递归）")
-    ap.add_argument("--json", action="store_true",
-                    help="machine-readable JSON, English keys / 输出机器可读 JSON（英文 key）")
-    ap.add_argument("--quiet", action="store_true",
-                    help="print per-file counts only / 只打印每文件计数")
-    ap.add_argument("--self-test", action="store_true",
-                    help="run the built-in regex self-test and exit / 跑内置正则自检后退出")
+        epilog=tr("scan_epilog"))
+    ap.add_argument("paths", nargs="*", help=tr("paths_help"))
+    ap.add_argument("--json", action="store_true", help=tr("json_help"))
+    ap.add_argument("--quiet", action="store_true", help=tr("quiet_help"))
+    ap.add_argument("--summary", action="store_true",
+                    help=tr("summary_help"))
+    ap.add_argument("--jobs", type=int, default=1, metavar="N",
+                    help=tr("jobs_help"))
+    ap.add_argument("--self-test", action="store_true", help=tr("selftest_help"))
+    ap.add_argument("--lang", choices=["auto", "zh", "en"], default="auto",
+                    help=tr("lang_help"))
     args = ap.parse_args(argv)
+    set_lang(args.lang)
 
     if args.self_test:
         return self_test()
     if not args.paths:
-        ap.error("至少要给一个文件或目录（或用 --self-test）")
+        ap.error(tr("err_no_paths"))
+    if args.jobs < 1:
+        ap.error(tr("err_jobs_range", got=args.jobs))
 
     files, missing = iter_py_files(args.paths)
     if missing:
-        print(f"\n[error] {len(missing)} 个输入路径不存在，已中止："
-              + ", ".join(str(p) for p in missing), file=sys.stderr)
+        print(tr("err_missing_paths", n=len(missing),
+                 paths=", ".join(str(p) for p in missing)), file=sys.stderr)
         return 2
-    report, total = [], 0
-    for p in files:
+
+    def _one(p: Path) -> dict | None:
         try:
             found, lits = scan_source(p.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError) as exc:
-            print(f"[warn] 解析失败，跳过 {p}: {type(exc).__name__}: {exc}", file=sys.stderr)
-            continue
-        total += len(found)
-        report.append({"file": str(p), "sources": found, "sensitive_literals": lits})
+            print(tr("warn_parse_fail", p=p, type=type(exc).__name__, exc=exc),
+                  file=sys.stderr)
+            return None
+        return {"file": str(p), "sources": found, "sensitive_literals": lits}
+
+    # jobs=1 走串行（保持默认行为与输出顺序）；>1 用线程池（GIL 下 CPU 密集收益有限，
+    # 但对网络盘 / 冷缓存读取仍有效，且不引入第三方依赖）
+    if args.jobs > 1 and len(files) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            results = list(pool.map(_one, files))
+    else:
+        results = [_one(p) for p in files]
+
+    report = [r for r in results if r is not None]
+    total = sum(len(r["sources"]) for r in report)
 
     if args.json:
-        print(json.dumps({"files": report, "total_sources": total}, ensure_ascii=False, indent=2))
+        print(json.dumps({"files": report, "total_sources": total},
+                         ensure_ascii=False, indent=2))
+        return 1 if total else 0
+
+    if args.summary:
+        print(tr("summary_head"))
+        for item in report:
+            print(tr("summary_row", file=item["file"],
+                     sources=len(item["sources"]),
+                     lits=len(item["sensitive_literals"])))
+        print(tr("total_count", files=len(report), total=total))
         return 1 if total else 0
 
     for item in report:
         found = item["sources"]
         if args.quiet:
-            print(f"{item['file']}: {len(found)} 处候选源")
+            print(tr("quiet_count", file=item["file"], n=len(found)))
             continue
         print("=" * 78)
-        print(f"被测文件: {item['file']}")
+        print(tr("header_file", file=item["file"]))
         print("=" * 78)
-        print(f"\n【真·source（会驱动 taint 流）】共 {len(found)} 处")
+        print("\n" + tr("header_real", n=len(found)))
         for s in found:
             print(f"  L{s['line']:<5} {s['class']:32s} {s['label']:26s} -> {s['hits']}")
             print(f"        {s['text']}")
         if not found:
             print("  （无）")
         lits = item["sensitive_literals"]
-        print(f"\n【敏感字符串字面量（仅当被当 lookup key 时才是 source）】共 {len(lits)} 个")
+        print("\n" + tr("header_literals", n=len(lits)))
         for s in lits:
             print(f"  {s!r:44s} -> {classify(s)}")
         if found:
-            print("\n提示：本脚本列出全部 5 类 classify。具体某条查询只取其中一部分——"
-                  "\n      py/clear-text-storage-sensitive-data 用的是 secret / password / private，"
-                  "\n      而 id 与 certificate 被显式排除（见 CleartextStorageCustomizations.qll）。")
+            print("\n" + tr("hint_text"))
         print()
 
     if args.quiet:
-        print(f"合计: {len(files)} 文件 / {total} 处候选源")
+        print(tr("total_count", files=len(files), total=total))
     return 1 if total else 0
 
 

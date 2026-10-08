@@ -33,6 +33,13 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from i18n import tr, set_lang  # noqa: E402
+
+
+class SarifError(Exception):
+    """SARIF 结构非法（已打印人可读的定位信息）。用��与「文件不存在」区分开。"""
+
 
 def _snippet(region: dict) -> str:
     txt = (region.get("snippet") or {}).get("text", "")
@@ -63,9 +70,52 @@ def _loc_desc(loc: dict) -> dict:
 
 
 def parse_sarif(path: Path) -> dict:
-    """返回 {tool, version, artifacts, results:[{rule, level, message, sink, flows:[[step,...]]}]}"""
-    data = json.loads(path.read_text(encoding="utf-8"))
-    runs = data.get("runs", [])
+    """返回 {tool, version, artifacts, results:[{rule, level, message, sink, flows:[[step,...]]}]}
+
+    对顶层结构做显式校验：不是 SARIF / runs 结构畸形时**抛异常**，
+    绝不静默返回「0 条结果」——那是最危险的误判（把「读错了文件」当成「干净」）。
+    """
+    raw = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(tr("err_not_json", p=path, line=getattr(exc, "lineno", 0),
+                 col=getattr(exc, "colno", 0), reason=exc.msg), file=sys.stderr)
+        lines = raw.splitlines()
+        ln = getattr(exc, "lineno", 0)
+        if 0 < ln <= len(lines) and lines[ln - 1].strip():
+            print(tr("err_json_near", near=lines[ln - 1].strip()[:60]), file=sys.stderr)
+        print(tr("how_to_fix", hint=tr("hint_sarif_json")), file=sys.stderr)
+        raise SarifError(str(exc)) from exc
+
+    if not isinstance(data, dict) or "runs" not in data:
+        print(tr("err_not_sarif", p=path), file=sys.stderr)
+        print(tr("how_to_fix", hint=tr("hint_sarif_json")), file=sys.stderr)
+        raise SarifError("not a SARIF file")
+    runs = data["runs"]
+    if not isinstance(runs, list):
+        print(tr("err_sarif_shape", p=path, idx=0, reason="not a list"), file=sys.stderr)
+        print(tr("how_to_fix", hint=tr("hint_sarif_shape")), file=sys.stderr)
+        raise SarifError("runs is not a list")
+    for i, run in enumerate(runs):
+        if not isinstance(run, dict):
+            print(tr("err_sarif_shape", p=path, idx=i, reason="entry is not an object"),
+                  file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_sarif_shape")), file=sys.stderr)
+            raise SarifError(f"runs[{i}] is not an object")
+        if "results" in run and run["results"] is not None and not isinstance(run["results"], list):
+            print(tr("err_sarif_shape", p=path, idx=i, reason="results is not a list"),
+                  file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_sarif_shape")), file=sys.stderr)
+            raise SarifError(f"runs[{i}].results is not a list")
+        # results 列表内的元素也必须是对象，否则下游 r.get() 会炸成 AttributeError
+        for j, r in enumerate(run.get("results") or []):
+            if not isinstance(r, dict):
+                print(tr("err_sarif_shape", p=path, idx=i,
+                         reason=f"results[{j}] is not an object"), file=sys.stderr)
+                print(tr("how_to_fix", hint=tr("hint_sarif_shape")), file=sys.stderr)
+                raise SarifError(f"runs[{i}].results[{j}] is not an object")
+
     out = {"file": str(path), "tool": "?", "version": "?", "artifacts": 0, "results": []}
     for run in runs:
         driver = (run.get("tool") or {}).get("driver") or {}
@@ -100,11 +150,12 @@ def parse_sarif(path: Path) -> dict:
 
 def print_report(info: dict, paths_only: bool = False) -> None:
     print("=" * 78)
-    print(f"SARIF: {info['file']}")
-    print(f"工具: {info['tool']} {info['version']}   扫描文件数: {info['artifacts']}")
+    print(tr("header_sarif", file=info["file"]))
+    print(tr("header_tool", tool=info["tool"], version=info["version"],
+             artifacts=info["artifacts"]))
     print("=" * 78)
     n = len(info["results"])
-    print(f"\n★ 结果数: {n}  -> {'✅ 干净' if not n else '⛔ 有告警'}\n")
+    print(tr("result_prefix", n=n) + (tr("status_clean") if not n else tr("status_alerts")))
     for i, r in enumerate(info["results"], 1):
         sink = r["sink"] or {}
         print(f"[{i}] {r['rule']}  ({r['level']})")
@@ -114,7 +165,7 @@ def print_report(info: dict, paths_only: bool = False) -> None:
         if paths_only:
             continue
         for fi, steps in enumerate(r["flows"], 1):
-            print(f"    ── taint 路径 #{fi}（source → … → sink，共 {len(steps)} 步）──")
+            print("    " + tr("flow_header", fi=fi, steps=len(steps)))
             for si, s in enumerate(steps):
                 tag = "SOURCE" if si == 0 else ("SINK  " if si == len(steps) - 1 else "      ")
                 print(f"      {tag} {si:2d}. {s['file']}:{s['line']:<5} {s['role']}")
@@ -124,30 +175,31 @@ def print_report(info: dict, paths_only: bool = False) -> None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Parse a CodeQL SARIF file and print source->sink data flows. / "
-                    "解析 CodeQL SARIF，打印 source→sink 数据流。")
-    ap.add_argument("sarif", nargs="+",
-                    help="SARIF file(s), one or more / SARIF 文件（可多个）")
-    ap.add_argument("--json", action="store_true",
-                    help="machine-readable JSON, English keys / 输出机器可读 JSON（英文 key）")
-    ap.add_argument("--paths-only", action="store_true",
-                    help="list sink locations only, do not expand the flow / 只列 sink 位置，不展开数据流")
-    ap.add_argument("--expect", type=int, metavar="N",
-                    help="assert the total result count is N; exit 1 otherwise / "
-                         "断言结果总条数为 N；不符则退出码 1")
+    ap = argparse.ArgumentParser(description=tr("read_desc"),
+                                epilog=tr("read_epilog"))
+    ap.add_argument("sarif", nargs="+", help=tr("sarif_help"))
+    ap.add_argument("--json", action="store_true", help=tr("r_json_help"))
+    ap.add_argument("--paths-only", action="store_true", help=tr("paths_only_help"))
+    ap.add_argument("--expect", type=int, metavar="N", help=tr("expect_help"))
+    ap.add_argument("--lang", choices=["auto", "zh", "en"], default="auto",
+                    help=tr("lang_help"))
     args = ap.parse_args(argv)
+    set_lang(args.lang)
 
     infos = []
     for raw in args.sarif:
         p = Path(raw)
         if not p.is_file():
-            print(f"[error] 文件不存在: {p}", file=sys.stderr)
+            print(tr("err_file_missing", p=p), file=sys.stderr)
             return 2
         try:
             infos.append(parse_sarif(p))
+        except SarifError:
+            # parse_sarif 内部已打印行列号 / 结构问题 / 修复建议，此处不重复输出
+            return 2
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            print(f"[error] 解析失败 {p}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(tr("err_parse_fail", p=p, type=type(exc).__name__, exc=exc),
+                  file=sys.stderr)
             return 2
 
     total = sum(len(i["results"]) for i in infos)
@@ -159,13 +211,13 @@ def main(argv=None) -> int:
         for info in infos:
             print_report(info, paths_only=args.paths_only)
         if len(infos) > 1:
-            print(f"合计: {len(infos)} 份 SARIF / {total} 条结果")
+            print(tr("total_sarif", n=len(infos), total=total))
 
     if args.expect is not None:
         if total != args.expect:
-            print(f"❌ 断言失败：期望 {args.expect} 条结果，实际 {total} 条", file=sys.stderr)
+            print(tr("assert_fail", expect=args.expect, total=total), file=sys.stderr)
             return 1
-        print(f"✅ 断言通过：结果数 = {args.expect}")
+        print(tr("assert_pass", expect=args.expect))
         return 0
     return 1 if total else 0
 

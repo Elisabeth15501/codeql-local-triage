@@ -114,15 +114,79 @@ This is the hard check that the CLI is usable before you trust a real triage run
 
 ## 5. 国内与离线选项 / Domestic & offline options  ← R6
 
-CodeQL CLI 的下载源是 `github.com`，国内网络环境可能偏慢。可选方案（**纯提示，按需采用**）：
-The CLI is downloaded from `github.com`, which can be slow in some regions. Options (hints only, adopt as needed):
+> **先读这一条**：如果你只是想判断「这条告警是不是命中名字启发式、污染从哪开始」，**本节整段都可以跳过**——
+> 预筛（`scan_sensitive_sources.py`）与读 SARIF（`read_sarif.py`）**零依赖、不联网**。
+> 只有需要「用对照实验**证明**因果」时才需要装 CLI。
+>
+> **Read this first**: if you only need to know *whether* the alert is a name-heuristic hit and *where*
+> the taint starts, **skip this whole section** — the prefilter and SARIF reader need no download.
+> Install the CLI only when you need the controlled experiment that *proves* the cause.
 
-1. **镜像 / 代理**：若你的环境提供 GitHub 镜像或代理，把 §1 的 `gh release download` 走镜像即可；二进制本身不含任何受限内容。
-   **Mirror / proxy**: route the §1 `gh release download` through a GitHub mirror or proxy available in your environment.
-2. **预建数据库 + 随附查询包**：在有访问能力的机器上先 `codeql database create` 产出 DB，并把 `~/.codeql/packages`（首次 `analyze --download` 拉下来的查询包）一并拷到离线机器。之后 `--codeql /abs/path` 指向本地二进制即可完全离线跑。
-   **Pre-built DB + carried packs**: on a machine with access, build the DB and copy `~/.codeql/packages` (the packs pulled by the first `analyze --download`) to the offline machine; then `--codeql /abs/path` runs fully offline.
-3. **零依赖两步永不需 CodeQL**：预筛（`scan_sensitive_sources.py`）和读 SARIF（`read_sarif.py`）**完全不碰 CodeQL**，任何装有 Python 的机器都能跑——只有第 ③ 步变体二分才需要本节安装的 CLI。换言之，**核心判定不依赖一次海外大体积下载**。
-   **The two zero-dependency steps never need CodeQL at all**: the prefilter and SARIF reader run on any Python machine; only step ③ needs the CLI installed here. In other words, the core judgement does not depend on one large overseas download.
+CodeQL CLI 的下载源是 `github.com`，国内网络环境可能偏慢。以下方案**按需采用，第 1 条可直接复制粘贴**。
+The CLI is downloaded from `github.com`, slow in some regions. Adopt as needed — **option 1 is copy-pasteable**.
+
+### 5.1 走镜像下载（推荐，最省事）/ Download via a mirror (recommended)
+
+把 §1 的 `gh release download` 加 `--repo` 指向镜像前缀即可。下面以几个常见镜像为例，**换成本环境可用的那个**：
+
+Add a mirror prefix to the §1 `gh release download`. Pick whichever mirror your network can reach:
+
+```bash
+# 方案 A：环境变量式镜像（最灵活，一次设置全局生效）
+export GH_HOST=mirror.example.com          # ← 换成你可用的镜像域名
+gh release download v2.27.1 --repo github/codeql-cli-binaries --pattern "codeql-win64.zip"
+
+# 方案 B：只代理 GitHub release 下载走代理（gh 原生支持）
+export HTTPS_PROXY=http://127.0.0.1:7890
+gh release download v2.27.1 --repo github/codeql-cli-binaries --pattern "codeql-win64.zip"
+
+# 方案 C：用 curl 走镜像直接下（不需要 gh）
+curl -L -o codeql-win64.zip "https://mirror.example.com/github/codeql-cli-binaries/releases/download/v2.27.1/codeql-win64.zip"
+```
+
+> 校验：解压根目录下的 `codeql/codeql version` 打印 `2.27.1` 即成功；`testzip()` 应返回 `None`（无损坏成员）。
+> Verify: `./codeql/codeql version` prints `2.27.1`; `testzip()` returns `None` (no corrupt members).
+> 二进制本身不含任何受限内容，**换镜像源不改变校验值、不影响结果**。
+> The binary contains no restricted content — **switching mirrors changes no checksum and no result**.
+
+### 5.2 预建数据库 + 随附查询包 / Pre-built DB + carried packs
+
+在有访问能力的机器上先 `codeql database create` 产出 DB，并把 `~/.codeql/packages`（首次
+`analyze --download` 拉下来的查询包）一并拷到离线机器。之后 `--codeql /abs/path` 指向本地二进制即可完全离线跑。
+
+On a machine with access, build the DB and copy `~/.codeql/packages` (the packs pulled by the first
+`analyze --download`) to the offline machine; then `--codeql /abs/path` runs fully offline.
+
+```bash
+# 有网机器：建库一次，并把查询包落盘带走
+codeql database create ./db --language=python --source-root=src --threads=0
+codeql database analyze ./db --format=sarif-latest --output=./probe.sarif \
+    --download codeql/python-queries:Security/CWE-312/CleartextStorage.ql   # ← 只为把 ~/.codeql/packages 拉下来
+
+# 拷到离线机器后
+cp -r ~/.codeql/packages <离线机器>/.codeql/
+./codeql/codeql database analyze <path>/db --format=sarif-latest --output=out.sarif \
+    "codeql/python-queries:Security/CWE-312/CleartextStorage.ql"           # 不再需要 --download
+```
+
+> **复用同一份 DB**：同一棵源码只需建库一次，后续对照实验把 `--source-root` 指回同一目录即可，
+> 把「每次 ~9 分钟建库」摊薄成「只付首次成本」。
+> **Reuse one DB**: build once per source tree; point later runs at the same root, paying the build cost once.
+
+### 5.3 零依赖两步永不需 CodeQL / The two zero-dependency steps never need CodeQL
+
+预筛（`scan_sensitive_sources.py`）和读 SARIF（`read_sarif.py`）**完全不碰 CodeQL**，任何装有 Python 的
+机器都能跑——只有第 ③ 步变体二分才需要本节安装的 CLI。换言之，**核心判定不依赖一次海外大体积下载**。
+
+The two zero-dependency steps run on any Python machine; only step ③ needs the CLI. In other words,
+**the core judgement does not depend on one large overseas download**.
+
+```bash
+# 这两条在任何装了 Python 的机器上都能跑（含离线 / 国内网络）
+python scripts/scan_sensitive_sources.py src/          # 预筛
+python scripts/read_sarif.py out.sarif                 # 读数据流
+python tests/run_tests.py                              # 自测（也不需要 CodeQL）
+```
 
 ---
 

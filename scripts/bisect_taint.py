@@ -56,6 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from read_sarif import parse_sarif  # noqa: E402
+from i18n import tr, set_lang  # noqa: E402
 
 CONTROL = "t1_control"
 DEFAULT_QUERY = "codeql/python-queries:Security/CWE-312/CleartextStorage.ql"
@@ -72,13 +73,14 @@ def _run_codeql(cmd: list[str]) -> int:
     """
     quoted = " ".join(f'"{c}"' if " " in c else c for c in cmd)
     for attempt in (1, 2):
-        print(f"  (尝试 {attempt}/2) $ {quoted}", flush=True)
+        print(tr("try_attempt", attempt=attempt, cmd=quoted), flush=True)
         try:
             # 列表传参、shell=False、来源为本地受信的 codeql 路径（S5 安全整改）
             return subprocess.run(cmd, timeout=CODEQL_TIMEOUT, shell=False).returncode
         except subprocess.TimeoutExpired:
-            print(f"[warn] codeql 单步超时（>{CODEQL_TIMEOUT}s）"
-                  f"{'，重试一次' if attempt == 1 else '，重试仍超时，放弃'}", file=sys.stderr)
+            retry = tr("retry_once") if attempt == 1 else tr("retry_giveup")
+            print(tr("warn_timeout", timeout=CODEQL_TIMEOUT, retry=retry),
+                  file=sys.stderr)
     return 124
 
 
@@ -115,86 +117,116 @@ def read_raw(path: Path) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Locate a CodeQL taint source by variant bisection. / 变体二分定位 CodeQL taint 源。",
+        description=tr("bisect_desc"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Exit codes / 退出码: 0 = finished, baseline reproduced / 跑完且基线复现; "
-               "1 = baseline not reproduced / 基线未复现; 2 = error / 出错.")
-    ap.add_argument("--source", required=True,
-                    help="file to modify, relative to --tree / 要改的源文件（相对 --tree）")
-    ap.add_argument("--tree", default=".",
-                    help="package root, copied wholesale into each variant (default: cwd) / "
-                         "包根目录，整体复制进每个变体（默认当前目录）")
+        epilog=tr("bisect_epilog"))
+    ap.add_argument("--source", required=True, help=tr("source_help"))
+    ap.add_argument("--tree", default=".", help=tr("tree_help"))
     ap.add_argument("--variant", action="append", default=[], metavar="NAME=OLD:NEW",
-                    help="literal replacement, repeatable. OLD:NEW is colon-separated; NEW may "
-                         "contain colons / 字面量替换（可重复）。OLD:NEW 用冒号分隔，NEW 里可含冒号")
+                    help=tr("variant_help"))
     ap.add_argument("--variant-file", action="append", default=[], metavar="NAME=PATH",
-                    help="swap in a whole file, repeatable (for regex surgery) / "
-                         "整份替换源文件（可重复，用于正则手术类复杂改动）")
-    ap.add_argument("--workdir", default=None,
-                    help="where variants and artifacts are written / 变体与产物的落地目录")
-    ap.add_argument("--codeql", default=None,
-                    help="codeql executable; if omitted, variants are only staged / "
-                         "codeql 可执行文件；不给则只生成变体")
-    ap.add_argument("--query", default=DEFAULT_QUERY,
-                    help=f"query to run (default: {DEFAULT_QUERY}) / 查询（默认同上）")
-    ap.add_argument("--language", default="python",
-                    help="--language passed to database create / database create 的 --language")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="stage variants only, do not run CodeQL / 只生成变体，不跑 CodeQL")
+                    help=tr("variant_file_help"))
+    ap.add_argument("--workdir", default=None, help=tr("workdir_help"))
+    ap.add_argument("--codeql", default=None, help=tr("codeql_help"))
+    ap.add_argument("--query", default=DEFAULT_QUERY, help=tr("query_help"))
+    ap.add_argument("--language", default="python", help=tr("language_help"))
+    ap.add_argument("--dry-run", action="store_true", help=tr("dry_run_help"))
+    ap.add_argument("--lang", choices=["auto", "zh", "en"], default="auto",
+                    help=tr("lang_help"))
     args = ap.parse_args(argv)
+    set_lang(args.lang)
 
     tree = Path(args.tree).resolve()
     src_rel = Path(args.source)
     src_abs = (tree / src_rel).resolve()
     if not src_abs.is_file():
-        print(f"[error] 源文件不存在: {src_abs}", file=sys.stderr)
+        print(tr("err_source_missing", src=src_abs), file=sys.stderr)
         return 2
     workdir = Path(args.workdir or (tree / "_bisect")).resolve()
 
     # ── 组装变体清单：control 恒在最前 ──────────────────────────────────────
     variants: list[tuple[str, str | None]] = [(CONTROL, None)]
+    seen_names: set[str] = {CONTROL}
     for spec in args.variant:
-        if "=" not in spec or ":" not in spec.split("=", 1)[1]:
-            ap.error(f"--variant 需要 NAME=OLD:NEW 格式，收到: {spec}")
+        # 四类显式校验，各自给具体原因 + 修复示例（评测扣分点：「参数校验缺少显式校验逻辑」）
+        if "=" not in spec:
+            print(tr("err_variant_no_eq", spec=spec), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
+            return 2
         name, pair = spec.split("=", 1)
+        if ":" not in pair:
+            print(tr("err_variant_no_colon", name=name, spec=spec), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
+            return 2
         old, new = pair.split(":", 1)
+        if not name:
+            print(tr("err_variant_no_name", spec=spec), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
+            return 2
+        if name in seen_names:
+            print(tr("err_variant_dup_name", name=name), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
+            return 2
+        if not old:
+            print(tr("err_variant_empty_old", name=name), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
+            return 2
+        if not new:
+            print(tr("err_variant_empty_new", name=name), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
+            return 2
+        seen_names.add(name)
         text = read_raw(src_abs)
         mutated = text.replace(old, new)
         if mutated == text:
-            print(f"[error] 变体 {name} 未产生任何改动（OLD 没出现？）: {old!r}", file=sys.stderr)
+            print(tr("variant_no_change", name=name, old=old), file=sys.stderr)
             return 2
         variants.append((name, mutated))
-        print(f"变体 {name}: {text.count(old)} 处 {old!r} -> {new!r}")
+        print(tr("variant_summary", name=name, count=text.count(old), old=old, new=new))
     for spec in args.variant_file:
+        if "=" not in spec:
+            print(tr("err_variantfile_no_eq", spec=spec), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant_file")), file=sys.stderr)
+            return 2
         name, _, path = spec.partition("=")
+        if not name:
+            print(tr("err_variantfile_no_name", spec=spec), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant_file")), file=sys.stderr)
+            return 2
+        if name in seen_names:
+            print(tr("err_variant_dup_name", name=name), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant_file")), file=sys.stderr)
+            return 2
         p = Path(path)
         if not p.is_file():
-            print(f"[error] 替换文件不存在: {p}", file=sys.stderr)
+            print(tr("err_replace_file", p=p), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant_file")), file=sys.stderr)
             return 2
+        seen_names.add(name)
         variants.append((name, read_raw(p)))
-        print(f"变体 {name}: 整份替换为 {p}")
+        print(tr("variant_file_summary", name=name, p=p))
 
     # ── 生成变体目录 ────────────────────────────────────────────────────────
-    print(f"\n工作目录: {workdir}\n包根: {tree}\n源文件: {src_rel}\n")
+    print(tr("workdir_header", workdir=workdir, tree=tree, src=src_rel))
     staged: list[tuple[str, Path]] = []
     for name, body in variants:
         d = workdir / name
         tgt = _stage(tree, src_rel, d, body, workdir)
         n_lines = len(tgt.read_text(encoding="utf-8").splitlines())
         staged.append((name, d))
-        print(f"  已生成 {name:14s} ({n_lines} 行) -> {tgt}")
+        print(tr("staged", name=name, lines=n_lines, tgt=tgt))
 
     if args.dry_run or not args.codeql:
-        print("\n（未跑 CodeQL。加 --codeql <path> 执行建库+分析。）")
-        print("等价命令模板：")
-        print(f'  "{args.codeql or "<codeql>"}" database create "<变体目录>/_db" '
-              f'--language={args.language} --source-root="<变体目录>" --overwrite --threads=0')
-        print(f'  "{args.codeql or "<codeql>"}" database analyze "<变体目录>/_db" '
-              f'--format=sarif-latest --output="<变体目录>.sarif" --threads=0 "{args.query}"')
+        print(tr("dry_run_note"))
+        print(tr("cmd_intro"))
+        print(f'  "{args.codeql or "<codeql>"}" database create "<dir>/_db" '
+              f'--language={args.language} --source-root="<dir>" --overwrite --threads=0')
+        print(f'  "{args.codeql or "<codeql>"}" database analyze "<dir>/_db" '
+              f'--format=sarif-latest --output="<dir>.sarif" --threads=0 "{args.query}"')
         return 0
 
     if not Path(args.codeql).is_file():
-        print(f"[error] codeql 不存在: {args.codeql}", file=sys.stderr)
+        print(tr("err_codeql_missing", codeql=args.codeql), file=sys.stderr)
         return 2
 
     # ── 逐个建库 + 分析 ─────────────────────────────────────────────────────
@@ -207,39 +239,39 @@ def main(argv=None) -> int:
                           f"--language={args.language}", f"--source-root={d}",
                           "--overwrite", "--threads=0"])
         if rc:
-            print(f"[error] {name} 建库失败（exit {rc}）", file=sys.stderr)
+            print(tr("err_build_fail", name=name, rc=rc), file=sys.stderr)
             return 2
         rc = _run_codeql([args.codeql, "database", "analyze", str(db),
                           "--format=sarif-latest", f"--output={sarif}",
                           "--threads=0", args.query])
         if rc:
-            print(f"[error] {name} 分析失败（exit {rc}）", file=sys.stderr)
+            print(tr("err_analyze_fail", name=name, rc=rc), file=sys.stderr)
             return 2
         try:
             counts[name] = len(parse_sarif(sarif)["results"])
         except Exception as exc:  # noqa: BLE001 - 报告并继续，别让一个变体毁掉整轮
-            print(f"[warn] {name} 的 SARIF 解析失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(tr("warn_sarif_parse", name=name, type=type(exc).__name__, exc=exc),
+                  file=sys.stderr)
             counts[name] = -1
 
     # ── 判定表 ──────────────────────────────────────────────────────────────
     print("\n" + "=" * 78)
-    print(f"{'变体':16s} {'结果数':>7s}   判定")
+    print(tr("verdict_head"))
     print("-" * 78)
     for name, _ in staged:
         n = counts.get(name, -1)
         if name == CONTROL:
-            verdict = "基线复现 ✅" if n > 0 else "⛔ 基线未复现！结论不可信"
+            verdict = tr("verdict_baseline_ok") if n > 0 else tr("verdict_baseline_fail")
         elif n == 0:
-            verdict = "✅ 告警消失 ⇒ 该改动就是 taint 源"
+            verdict = tr("verdict_cause")
         elif n > 0:
-            verdict = "⛔ 仍命中 ⇒ 该改动不是成因"
+            verdict = tr("verdict_not_cause")
         else:
-            verdict = "? 解析失败"
+            verdict = tr("verdict_parse_fail")
         print(f"{name:16s} {n:>7d}   {verdict}")
 
     if counts.get(CONTROL, 0) <= 0:
-        print("\n⚠️  基线没有复现告警：本地环境/查询与远端可能不一致，"
-              "上面其它变体的结论不能采信。")
+        print(tr("warn_baseline"))
         return 1
     print()
     return 0

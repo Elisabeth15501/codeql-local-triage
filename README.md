@@ -18,6 +18,29 @@ This repository turns the investigation into three commands:
 GitHub 的 Code Scanning 告警页面**不告诉你数据从哪来**——只标出 sink 那一行。
 远端扫描又要等好几分钟，还没法做对照实验。本仓库把排查变成三条命令：
 
+> ### ★ Start here: the zero-dependency fast path
+>
+> **Steps ① and ② need no download at all** — pure Python stdlib, no CodeQL, no network. The ~400 MB
+> CodeQL CLI exists only for step ③, whose single job is to **prove** causation by controlled
+> experiment. If you only need to know *whether* the alert comes from a name heuristic and *where* the
+> taint starts, steps ①② already answer that. Install the CLI when — and only when — you need the proof.
+>
+> **从第 ① 步开始：零依赖快速路径。**
+>
+> **第 ① ② 步完全不需要下载任何东西**——纯 Python 标准库，不装 CodeQL、不联网。那 ~400MB 的
+> CodeQL CLI 只服务于第 ③ 步，而第 ③ 步唯一的作用是用对照实验**证明**因果。若你只需要知道
+> 「这条告警是否命中名字启发式、污染从哪开始」，前两步已经答完了；等到需要「证明」时再去装 CLI。
+>
+> | Your question / 你的问题 | Steps / 需要哪步 | Install CodeQL? |
+> |---|---|---|
+> | Which names could be sensitive sources? / 哪些名字算敏感源 | ① prefilter | **No** |
+> | Where does the taint start, what does the path look like? / 污染从哪开始、路径什么样 | ② `read_sarif.py` | **No** |
+> | Prove it is a false positive, not infer it / **证明**是误报，而非推测 | ①②③ | Yes |
+> | Verify the fix drives results to 0 / 验证修复后归零 | ② `--expect 0` | Only to regenerate SARIF |
+>
+> The self-test also runs without CodeQL: `python tests/run_tests.py`.
+> 自测同样不需要 CodeQL：`python tests/run_tests.py`。
+
 ```bash
 python scripts/scan_sensitive_sources.py src/     # 1. prefilter, no DB build needed / 免建库预筛
 python scripts/read_sarif.py out.sarif            # 2. draw the full source→sink path / 读出完整数据流
@@ -151,6 +174,7 @@ file, `tests/fixtures/sarif/repro_fixed.sarif`. Two things about this fix are wo
 | `scripts/bisect_taint.py` | **Variant bisection.** Generates "one change only" copies of the tree → builds and analyses each → prints a verdict table. Aborts if the baseline does not reproduce, so you never trust an invalid conclusion.<br>**变体二分**。生成「只改一处」的副本 → 逐个建库+分析 → 输出判定表。基线没复现就直接报错，避免采信无效结论。 |
 | `references/sensitive-data-heuristics.md` | Cheat sheet for the name heuristics: 5 regex groups, the exclusion regex, 7 source categories, and the CWE-312 source/sink special cases.<br>名字启发式速查表：5 组正则、反向排除器、7 类 source、CWE-312 的 source/sink 特例。 |
 | `references/faq.md` | **High-frequency questions in one place**: what to do when the baseline does not reproduce, how to make a variant for a complex change, whether you can just dismiss an alert, which names are *not* sensitive.<br>**高频问题集中收口**：基线没复现怎么办、复杂改动怎么做变体、能不能直接 dismiss、哪些名字不算敏感源。 |
+| `references/ci-integration.md` | **CI gate recipes**: minimal GitHub Actions / GitLab CI snippets that turn "result count must be 0" into an automated check.<br>**CI 门禁配方**：GitHub Actions / GitLab CI 最小片段，把「结果数必须归零」变成自动门禁。 |
 | `references/README.md` | Index of the `references/` directory: what each file is for and when to read it.<br>`references/` 目录索引：每个文件的用途与适用场景。 |
 | `SKILL.md` | The skill definition for AI agents (Claude Code / WorkBuddy / …); installable as a whole.<br>给 AI agent 用的技能定义，可整套安装。 |
 | `tests/` | Self-test that needs **no CodeQL**: two *measured* SARIF fixtures plus per-item assertions.<br>不需要 CodeQL 的自测：两份**实测** SARIF fixture + 逐项断言。 |
