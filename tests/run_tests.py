@@ -259,8 +259,11 @@ def test_fixtures_differ_only_in_name() -> None:
 
 
 def test_read_sarif_counts() -> None:
+    # SkillHub 的发布包封禁 .sarif（实测 400），故这两个 fixture 在该平台上不存在。
+    # 缺失时**跳过而非判失败**——否则包一旦发出去，自测就永远红，等于交付一个"必失败"的技能。
+    # 完整仓库（GitHub / ClawHub / 本地）保留 fixture，这两条断言照常生效。
     if not SARIF_HIT.is_file() or not SARIF_CLEAN.is_file():
-        check("SARIF fixture 存在", False, "请先生成 tests/fixtures/sarif/*.sarif")
+        print("  skip  SARIF fixtures 不在本包内（SkillHub 封禁 .sarif）—— 跳过 SARIF 读数断言")
         return
     r = _run(READ, str(SARIF_HIT), "--expect", "1")
     check("repro.sarif 结果数 = 1（--expect 断言通过）", r.returncode == 0, r.stdout[-300:])
