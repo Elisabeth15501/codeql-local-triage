@@ -1,5 +1,10 @@
 # CI 集成 · 把「结果数必须归零」变成自动门禁
 
+<!-- locale-policy note · 语言政策声明
+此文件有意中英混排：本技能的读者群体**同时**包含中文使用者与英文使用者，且**不强制任一语言**（中文使用者可直接读本文件，英文使用者亦然）。单语版本见 README → "Language selection"，亦可用 --lang en 显式指定语言。
+This file is intentionally bilingual: the audience is both Chinese- and English-speaking, and neither language is imposed. A single-language edition is selectable — see README → "Language selection"; the CLI takes --lang en to pin the language explicitly.
+-->
+
 > 面向想把告警修复验收**自动化**的用户。三步里只有第 ①② 步适合进 CI（零依赖、不需要装 CodeQL）；
 > 第 ③ 步建库耗时且依赖 CLI，**不建议放进流水线**——它属于「本地做一次」的深度排查。
 >

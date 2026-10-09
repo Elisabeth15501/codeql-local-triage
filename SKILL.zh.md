@@ -8,7 +8,7 @@ disable-model-invocation: false
 user-invocable: true
 context: fork
 agent_created: true
-version: 1.0.7
+version: 1.0.8
 ---
 
 # 本地 CodeQL 告警定位与修复验收

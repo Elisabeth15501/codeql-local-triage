@@ -437,6 +437,31 @@ def test_scripts_honor_lang() -> None:
           r_zh.stdout[-160:])
 
 
+def test_codeql_download_doc_safety() -> None:
+    """v1.0.8 T08 回归：下载段不得把镜像写成与官方等价的安全选项，必须强调校验。
+
+    aig (ruleId T08) + clawscan (install_mechanism) 双双 concern 的根因是：文档把第三方
+    镜像写成「更省事」且断言「换镜像不改变校验和」—— 这不成立（第三方镜像可能提供被替换的归档）。
+    本测试守住整改后的形态：官方源为默认、镜像为不可信回退、强制 sha256 校验、删除错误断言。
+    """
+    doc = (ROOT / "references" / "running-codeql-cli.md").read_text(encoding="utf-8")
+
+    check("下载段含官方源命令（--repo github/codeql-cli-binaries）",
+          "gh release download" in doc
+          and "--repo github/codeql-cli-binaries" in doc,
+          "缺少官方 GitHub Release 下载命令")
+    check("下载段含 sha256sum --check 强制校验",
+          "sha256sum --check" in doc,
+          "缺少 SHA-256 校验步骤")
+    check("镜像被标注为不可信回退（untrusted fallback / 不可信回退）",
+          "untrusted fallback" in doc or "不可信回退" in doc,
+          "未把镜像标注为不可信回退")
+    check("已删除'换镜像不改变校验和'类错误断言",
+          "changes no checksum" not in doc
+          and "不改变校验和" not in doc,
+          "仍含'换镜像不改变校验和'错误断言")
+
+
 TESTS = [test_prefilter_self_test, test_skill_frontmatter_is_plain_yaml,
          test_frontmatter_has_progressive_disclosure_fields,
          test_hard_constraints_are_marked_every_turn,
@@ -448,8 +473,8 @@ TESTS = [test_prefilter_self_test, test_skill_frontmatter_is_plain_yaml,
          test_fixtures_differ_only_in_name, test_read_sarif_counts,
          test_read_sarif_extracts_source,
          test_sarif_structure_errors, test_variant_arg_validation,
-         test_scan_jobs_and_summary, test_path_gating, test_variant_name_gating,
-         test_scripts_honor_lang]
+         test_scan_jobs_and_summary,          test_path_gating, test_variant_name_gating,
+         test_scripts_honor_lang, test_codeql_download_doc_safety]
 
 
 def main() -> int:

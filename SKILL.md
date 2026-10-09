@@ -1,7 +1,7 @@
 ---
 name: codeql-local-triage
 slug: codeql-local-triage
-version: 1.0.7
+version: 1.0.8
 displayName: 本地 CodeQL 告警定位与修复验收
 summary: 在本地复现 CodeQL 告警、用变体二分定位 taint 源并验证修复，给出可复现的因果结论。
 homepage: https://github.com/Elisabeth15501/codeql-local-triage

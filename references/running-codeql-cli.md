@@ -130,11 +130,18 @@ This is the hard check that the CLI is usable before you trust a real triage run
 CodeQL CLI 的下载源是 `github.com`，国内网络环境可能偏慢。以下方案**按需采用，第 1 条可直接复制粘贴**。
 The CLI is downloaded from `github.com`, slow in some regions. Adopt as needed — **option 1 is copy-pasteable**.
 
-### 5.1 走镜像下载（推荐，最省事）/ Download via a mirror (recommended)
+### 5.1 走镜像下载（仅官方源不可达时的不可信回退）/ Download via a mirror (untrusted fallback, official source unreachable only)
 
-把 §1 的 `gh release download` 加 `--repo` 指向镜像前缀即可。下面以几个常见镜像为例，**换成本环境可用的那个**：
+> **默认且唯一被本技能推荐的来源是官方 GitHub Release**（§1 的 `gh release download … --repo github/codeql-cli-binaries`）：它走官方 TLS + `gh` 对 release 资产的校验，不经任何第三方中转。**下面的镜像 / 代理方式不是等价的「更省事选项」，而是显式不可信回退**——仅在官方源在你所在网络确实不可达时使用，且**执行前你必须亲自核对 SHA-256**。
+> **The only source this skill recommends by default is the official GitHub Release** (§1 `gh release download … --repo github/codeql-cli-binaries`): official TLS + `gh`'s asset verification, no third-party hop. The mirror/proxy options below are **not an equivalent "easier" choice — they are an explicit untrusted fallback**, for when the official source is genuinely unreachable from your network, and **you must verify the SHA-256 yourself before running it**.
 
-Add a mirror prefix to the §1 `gh release download`. Pick whichever mirror your network can reach:
+官方源命令（默认 / default）：
+
+```bash
+gh release download v2.27.1 --repo github/codeql-cli-binaries --pattern "codeql-win64.zip"
+```
+
+不可信回退（仅官方源不可达时 / untrusted fallback — official source unreachable only）：
 
 ```bash
 # 方案 A：环境变量式镜像（最灵活，一次设置全局生效）
@@ -149,10 +156,21 @@ gh release download v2.27.1 --repo github/codeql-cli-binaries --pattern "codeql-
 curl -L -o codeql-win64.zip "https://mirror.example.com/github/codeql-cli-binaries/releases/download/v2.27.1/codeql-win64.zip"
 ```
 
-> 校验：解压根目录下的 `codeql/codeql version` 打印 `2.27.1` 即成功；`testzip()` 应返回 `None`（无损坏成员）。
-> Verify: `./codeql/codeql version` prints `2.27.1`; `testzip()` returns `None` (no corrupt members).
-> 二进制本身不含任何受限内容，**换镜像源不改变校验值、不影响结果**。
-> The binary contains no restricted content — **switching mirrors changes no checksum and no result**.
+> **执行前必须核对 SHA-256**（来自官方 release 页，**独立可信通道**取得；本技能不写死哈希，随版本过期会成新的假陈述）：
+> **Verify the SHA-256 before running (obtain it from the official release page via an independent trusted channel — this skill does not hardcode hashes, which would go stale and become a false statement per version):**
+>
+> ```bash
+> echo "<官方SHA256>  codeql-win64.zip" | sha256sum --check -
+> ```
+>
+> - ❌ 不要用 `./codeql/codeql version` 当「执行前安全检查」——它**已经运行了**刚下载的二进制，被替换的二进制同样能打印期望的版本号。
+>   Don't treat `./codeql/codeql version` as a pre-run safety check — it already executes the freshly downloaded binary; a replaced binary prints the expected version too.
+> - ❌ `ZipFile.testzip()` 只验证归档**未被损坏**，**不验证发布者**真实性。
+>   `ZipFile.testzip()` only checks the archive is **not corrupt**; it does **not** verify the publisher.
+> - ❌ 删除「镜像与官方校验和相同」这类断言：第三方镜像**完全可能**提供被替换的归档，哈希自然不同。
+>   Drop any "mirror == official checksum" claim — a third-party mirror can absolutely serve a replaced archive with a different hash.
+> - 若你无法从独立可信通道取得官方 SHA-256，则**不要使用镜像**，直接等官方源恢复。
+>   If you cannot obtain the official SHA-256 from an independent trusted channel, **do not use a mirror** — wait for the official source to recover.
 
 ### 5.2 预建数据库 + 随附查询包 / Pre-built DB + carried packs
 
