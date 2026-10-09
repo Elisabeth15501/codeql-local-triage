@@ -7,6 +7,9 @@
 >
 > All identifiers in this document are **synthetic examples**. None of them come from a real project.
 > 本文出现的标识符**全部是构造出来的示例**，不来自任何真实项目。
+>
+> **Language / 语言**：本文档为双语，仅为可读性；工具运行时的输出语言由用户通过 `--lang` 控制（默认英文，详见 README「Language selection」）。
+> This document is bilingual for readability only; the tool's runtime output language is user-controlled via `--lang` (default English — see README "Language selection").
 
 The content is transcribed from [github/codeql](https://github.com/github/codeql)
 (MIT License — see the attribution at the end):

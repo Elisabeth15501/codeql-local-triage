@@ -235,7 +235,7 @@ Run only the rule you care about — **never** the whole **query suite** (a Code
 只跑目标那一条，**别**跑整个 **query suite（查询套件，CodeQL 的查询集合概念，与系统服务/计划任务无关）**（`python-code-scanning.qls` 要几十分钟）：
 
 ```bash
-codeql database create  /tmp/db --language=python --source-root=src --overwrite --threads=0
+codeql database create  ./_db_triage --language=python --source-root=src --overwrite --threads=0
 codeql database analyze /tmp/db --download --format=sarif-latest --output=/tmp/out.sarif \
     --threads=0 "codeql/python-queries:Security/CWE-312/CleartextStorage.ql"
 ```
@@ -274,10 +274,12 @@ python scripts/bisect_taint.py --source scan.py --tree . \
 ## JSON output / JSON 输出（language-neutral / 语言中立）
 
 Both readers emit English JSON keys, so scripts and agents can consume them regardless of locale.
-All CLI *messages* are Chinese; `--json` is the locale-independent interface.
+All CLI *messages* follow the user's chosen language (`--lang {zh,en}` / `TRIAGE_LANG` /
+`AGENT_UI_LANG`, default English); `--json` is the locale-independent interface.
 
 两个读取脚本的 JSON key 都是英文，脚本与 agent 可跨语言直接消费。
-CLI 的**提示文字**目前是中文；`--json` 是与语言无关的接口。
+CLI 的**提示文字**跟随用户所选语言（`--lang {zh,en}` / `TRIAGE_LANG` / `AGENT_UI_LANG`，默认英文）；
+`--json` 是与语言无关的接口。
 
 ```jsonc
 // scripts/scan_sensitive_sources.py --json
@@ -305,6 +307,33 @@ CLI 的**提示文字**目前是中文；`--json` 是与语言无关的接口。
   "total_results": 1
 }
 ```
+
+## Language selection / 语言选择
+
+The CLI scripts are **not** hard-wired to one language — this is a deliberate, documented
+constraint, not an accident. The language is always **user-selectable**:
+
+- `--lang {zh,en}` on any script, or the `TRIAGE_LANG` / `AGENT_UI_LANG` environment variable.
+- `auto` (the default) resolves to a *single* language from the agent UI language or OS locale,
+  falling back to **English**; it never emits both languages at once.
+- `scripts/i18n.py` is the four-tier resolver (see its module docstring for full precedence).
+
+Why mono-language by design: these messages land in CI logs and terminals that are grepped, so one
+predictable language per stream is the useful default. Bilingual output is avoided because it risks a
+natural-language policy violation on generated content. **Chinese is fully supported** — a complete,
+equally authoritative Chinese rendering of this skill is `SKILL.zh.md`.
+
+本技能的命令行脚本**不**写死某一种语言——这是经过设计、明确记录的约束，并非疏漏。
+语言**始终由用户选择**：
+
+- 任意脚本加 `--lang {zh,en}`，或设置 `TRIAGE_LANG` / `AGENT_UI_LANG` 环境变量。
+- `auto`（默认）依据 agent 界面语言或系统 locale 解析出**单一**语言，默认回退**英文**；
+  绝不会中英同时输出。
+- `scripts/i18n.py` 是四级解析器（完整优先级见其模块文档字符串）。
+
+为何设计成单一语言：提示会出现在 CI 日志与终端里、常被 grep，所以每条流一种可预期的语言最实用。
+避免双语是因为它可能在生成内容上触发自然语言策略违规。**中文完全受支持**——本技能的完整、
+同等权威中文版是 `SKILL.zh.md`。
 
 Exit codes / 退出码:
 

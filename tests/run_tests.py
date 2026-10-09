@@ -23,11 +23,15 @@ Coverage / 覆盖：
   5. read_sarif recovers the source line from codeFlows, and it is that sensitive-name assignment
      read_sarif 能从 codeFlows 里取回 source 行，且就是那行敏感名赋值
 
-Note: the assertion labels printed below are Chinese. / 说明：下面打印的断言名称为中文。
+Note: the test harness's own check labels below are fixed strings; the *target scripts*
+honour ``--lang`` / ``TRIAGE_LANG`` — run ``python tests/run_tests.py --lang en`` to exercise
+the scripts in English. / 说明：本测试自身的检查标签为固定字符串；被测脚本尊重
+``--lang`` / ``TRIAGE_LANG`` —— 用 ``python tests/run_tests.py --lang en`` 即可让被测脚本以英文运行。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -46,11 +50,14 @@ SARIF_CLEAN = ROOT / "tests" / "fixtures" / "sarif" / "repro_fixed.sarif"
 FAILS: list[str] = []
 
 
-def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(script: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
     # 列表传参、shell=False、执行本仓脚本（本地受信），无外部输入（S5 安全整改）
+    run_env = dict(os.environ)
+    if env:
+        run_env.update(env)
     return subprocess.run([sys.executable, str(script), *args],
                           capture_output=True, text=True, encoding="utf-8",
-                          shell=False)
+                          shell=False, env=run_env)
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -384,6 +391,52 @@ def test_scan_jobs_and_summary() -> None:
     check("--jobs 0 被拦截", r.returncode != 0, f"实际 {r.returncode}")
 
 
+def test_path_gating() -> None:
+    """v1.0.7 P0：--source 绝对路径 / 含 ".." 必须被门禁拦下（exit 2），且不触碰目标文件。"""
+    import hashlib
+    outside = Path(tempfile.gettempdir()) / "_cql_outside_src.py"
+    outside.write_text("SECRET_PATTERNS = ['a']\n", encoding="utf-8")
+    before_sha = hashlib.sha256(outside.read_bytes()).hexdigest()
+
+    # 绝对路径：应在 src_rel 门禁处被拦（根本不会去读 is_file / 写盘）
+    r = _run(BISECT, "--source", str(outside), "--tree", str(REPRO.parent),
+             "--dry-run", "--variant", "t2=SECRET_PATTERNS:CREDENTIAL_PATTERNS")
+    check("绝对路径 --source 被门禁拦下（exit 2）", r.returncode == 2,
+          f"实际 {r.returncode}: {r.stderr[-160:]}")
+    check("绝对路径 --source 未触碰目标文件（sha256 不变）",
+          hashlib.sha256(outside.read_bytes()).hexdigest() == before_sha)
+
+    # 含 ".." 的相对路径
+    r = _run(BISECT, "--source", "../outside.py", "--tree", str(REPRO.parent),
+             "--dry-run", "--variant", "t2=SECRET_PATTERNS:CREDENTIAL_PATTERNS")
+    check("含 '..' 的 --source 被门禁拦下（exit 2）",
+          r.returncode == 2, f"实际 {r.returncode}: {r.stderr[-160:]}")
+
+    outside.unlink(missing_ok=True)
+
+
+def test_variant_name_gating() -> None:
+    """v1.0.7 P0：--variant 名字含 '..' / 非法字符必须被白名单拦下，且 workdir 外不新建目录。"""
+    base = ["--source", "scan.py", "--tree", str(REPRO.parent), "--dry-run"]
+    r = _run(BISECT, *base, "--variant", "../evil=SECRET_PATTERNS:CREDENTIAL_PATTERNS")
+    check("含 '..' 的变体名被白名单拦下（exit 2）",
+          r.returncode == 2, f"实际 {r.returncode}: {r.stderr[-160:]}")
+    check("变体名拦截附修复建议", "how to fix" in r.stderr, r.stderr[-160:])
+    # workdir/<name> 不应逃出 tree：若未被拦，--variant ../evil 会落到 tree/evil
+    evil = REPRO.parent / "evil"
+    check("workdir 外未新建目录（tree/evil 不存在）", not evil.exists())
+
+
+def test_scripts_honor_lang() -> None:
+    """A-4 (v1.0.7)：脚本尊重显式 --lang 选择，证明语言是用户可控的 opt-in（根因 A）。"""
+    r_en = _run(SCAN, "--self-test", env={"TRIAGE_LANG": "en"})
+    check("TRIAGE_LANG=en 时输出英文", "Self-test: all passed" in r_en.stdout,
+          r_en.stdout[-160:])
+    r_zh = _run(SCAN, "--self-test", env={"TRIAGE_LANG": "zh"})
+    check("TRIAGE_LANG=zh 时输出中文", "自检: 全部通过" in r_zh.stdout,
+          r_zh.stdout[-160:])
+
+
 TESTS = [test_prefilter_self_test, test_skill_frontmatter_is_plain_yaml,
          test_frontmatter_has_progressive_disclosure_fields,
          test_hard_constraints_are_marked_every_turn,
@@ -395,7 +448,8 @@ TESTS = [test_prefilter_self_test, test_skill_frontmatter_is_plain_yaml,
          test_fixtures_differ_only_in_name, test_read_sarif_counts,
          test_read_sarif_extracts_source,
          test_sarif_structure_errors, test_variant_arg_validation,
-         test_scan_jobs_and_summary]
+         test_scan_jobs_and_summary, test_path_gating, test_variant_name_gating,
+         test_scripts_honor_lang]
 
 
 def main() -> int:

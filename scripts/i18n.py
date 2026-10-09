@@ -4,11 +4,12 @@
 
 Language selection mechanism — four clearly separated tiers
 ============================================================
-The scripts cannot "see" the user's conversation. The language a message is
-printed in is chosen by a *deterministic, single-language* resolver. The tool
-**never** emits a mix of Chinese + English to the same user — bilingual output
-risks a natural-language policy violation on generated content, so it is
-forbidden by design.
+The scripts cannot "see" the user's conversation, so the language is a
+*user-controlled setting*: ``--lang {zh,en,auto}`` / ``TRIAGE_LANG`` / ``AGENT_UI_LANG``
+take precedence; ``auto`` follows the host locale and falls back to ``en``.
+Rationale: these messages land in CI logs and terminals that are grepped, so one
+predictable language per stream is the useful default — and any user who wants the
+other language pins it with ``--lang``. See README → "Language selection".
 
 Tier 1 — Explicit choice (highest priority)
     ``--lang {zh,en}`` CLI flag, or the ``TRIAGE_LANG`` environment variable
@@ -98,8 +99,9 @@ def tr(key: str, lang: str | None = None, **kw) -> str:
 MESSAGES = {
     "en": {
         # ---- shared ----
-        "lang_help": "UI language: 'auto' detects the agent's language (AGENT_UI_LANG env or OS "
-                     "locale) and defaults to English; 'zh'/'en' force one. Output is never bilingual.",
+        "lang_help": "UI language: 'auto' follows the host/user language (AGENT_UI_LANG env or OS "
+                     "locale) and defaults to English; 'zh'/'en' force one language. Pass --lang to "
+                     "pin the language you want; see README -> 'Language selection'.",
         "ok_label": "ok  ",
         "fail_label": "FAIL",
 
@@ -179,6 +181,11 @@ MESSAGES = {
         "language_help": "--language passed to database create (CodeQL build language, not UI language).",
         "dry_run_help": "Stage variants only, do not run CodeQL.",
         "err_source_missing": "[error] source file does not exist: {src}",
+        "err_source_not_relative": "[error] --source must be a path relative to --tree (no absolute path, no \"..\"): {src}",
+        "hint_source_relative": "pass --source as a relative path inside --tree, e.g. --source src/scan.py",
+        "err_variant_bad_name": "[error] invalid variant name {name!r}: must be [A-Za-z0-9] with . _ - only, 1-64 chars",
+        "hint_variant_name": "use a simple name like t2_rename; avoid slashes, \"..\" , or spaces",
+        "err_workdir_too_broad": "[error] --workdir {workdir} is too broad (drive root or home dir); pick a dedicated throwaway dir",
         "err_variant_no_eq": "[error] --variant is missing the \"=\" separator: {spec!r}",
         "err_variant_no_colon": "[error] --variant {name!r} is missing the \":\" between OLD and NEW: {spec!r}",
         "err_variant_no_name": "[error] --variant has an empty name: {spec!r}",
@@ -224,8 +231,8 @@ MESSAGES = {
 
     "zh": {
         # ---- shared ----
-        "lang_help": "界面语言：'auto' 按 agent 语言（AGENT_UI_LANG 环境变量或系统 locale）选择，默认英文；"
-                     "'zh'/'en' 强制指定。输出始终为单一语言，绝不中英混排。",
+        "lang_help": "界面语言：'auto' 跟随宿主/用户语言（AGENT_UI_LANG 环境变量或系统 locale），默认英文；"
+                     "'zh'/'en' 强制指定某一种语言。用 --lang 固定你想要的语言；见 README「语言选择」。",
         "ok_label": "ok  ",
         "fail_label": "FAIL",
 
@@ -299,6 +306,11 @@ MESSAGES = {
         "language_help": "database create 的 --language（CodeQL 建库语言，非界面语言）。",
         "dry_run_help": "只生成变体，不跑 CodeQL。",
         "err_source_missing": "[error] 源文件不存在: {src}",
+        "err_source_not_relative": "[error] --source 必须是相对 --tree 的路径（不接受绝对路径或 '..'）: {src}",
+        "hint_source_relative": "--source 传 --tree 内的相对路径，例如 --source src/scan.py",
+        "err_variant_bad_name": "[error] 变体名 {name!r} 非法：只能含字母数字与 . _ -，长度 1–64",
+        "hint_variant_name": "用简单名字如 t2_rename；不要含斜杠、'..' 或空格",
+        "err_workdir_too_broad": "[error] --workdir {workdir} 范围过大（盘符根或家目录）；请指定一个专用的临时目录",
         "err_variant_no_eq": "[error] --variant 缺少 \"=\" 分隔符: {spec!r}",
         "err_variant_no_colon": "[error] --variant {name!r} 的 OLD 与 NEW 之间缺少 \":\": {spec!r}",
         "err_variant_no_name": "[error] --variant 的变体名为空: {spec!r}",

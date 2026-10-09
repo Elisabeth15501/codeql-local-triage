@@ -16,6 +16,9 @@
 > 仅把 `extensions[].locations[].uri` 里的绝对路径替换为中性占位符 `file:///path/to/.codeql/packages/…`，
 > 以免发布任何与本机相关的路径。除此之外未作改动。
 
+> **Language / 语言**：本文档为双语，仅为可读性；工具运行时的输出语言由用户通过 `--lang` 控制（默认英文，详见 README「Language selection」）。
+> This document is bilingual for readability only; the tool's runtime output language is user-controlled via `--lang` (default English — see README "Language selection").
+
 ## `repro/` and `repro_fixed/` / 最小复现与对照
 
 A pair of minimal reproductions, 25 lines each / 一对最小复现，各 25 行：

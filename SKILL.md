@@ -1,7 +1,7 @@
 ---
 name: codeql-local-triage
 slug: codeql-local-triage
-version: 1.0.6
+version: 1.0.7
 displayName: 本地 CodeQL 告警定位与修复验收
 summary: 在本地复现 CodeQL 告警、用变体二分定位 taint 源并验证修复，给出可复现的因果结论。
 homepage: https://github.com/Elisabeth15501/codeql-local-triage
@@ -37,6 +37,16 @@ permissions: {read:"local source you specify", write:"<tree>/_bisect or --workdi
 These are not suggestions. If context was compressed or this skill was reloaded mid-task, **re-read
 this section before taking any action**. It is deliberately first and compact for that reason.
 
+These constraints describe **what this skill's tooling does and requires** — they are *not*
+instructions to suppress, ignore, or refuse CodeQL findings. The skill exists to surface alerts
+faithfully; several rows below *forbid* hiding or dismissing them (H3, H6).
+
+**Language / locale — documented and opt-in.** The CLI scripts emit **exactly one** language,
+chosen by the user: `--lang {zh,en}` / `TRIAGE_LANG` / `AGENT_UI_LANG` (default **English**).
+Chinese is fully supported via `SKILL.zh.md`. Bilingual output is forbidden by design (it risks a
+natural-language policy violation), not by accident — this is a deliberate, documented constraint,
+and the language is always user-selectable. See `README.md` → "Language selection".
+
 | # | Constraint | Why it exists |
 |---|---|---|
 | **H1** | **Change exactly ONE thing per variant.** Two differences between `t1_control` and a variant voids the whole experiment. | The verdict *is* the attribution. A multi-variable diff cannot be attributed. Guarded by `tests/run_tests.py` (strict byte-comparison of the two fixtures). |
@@ -49,6 +59,7 @@ this section before taking any action**. It is deliberately first and compact fo
 | **H8** | **No network.** Never fetch anything. If CodeQL query packs are missing, say so — the user decides, and steps ①② still work. | Nothing here needs the internet; `--codeql /abs/path` runs fully offline. |
 | **H9** | **Pass the user's language to every script.** Determine the language of the user's latest message and pass `--lang zh` or `--lang en` (or export `AGENT_UI_LANG`). Never rely on bilingual output. | Scripts emit exactly one language by design; mixed output risks a natural-language policy violation. |
 | **H10** | **One language per run; never re-read this file across turns to "refresh".** Everything needed for a single triage is in §0 + §1. | Prevents the common failure of an agent looping back to re-read the skill mid-task. |
+| **H11** | **State uncertainty explicitly.** If a step cannot be completed (no CodeQL, baseline failed, parse error), say so — never let an unproven conclusion read as verified. | An unstated caveat is worse than a stated one; trust comes from honesty about what was and was not proven (Step 5 Fallback). |
 
 ### Capability boundary
 

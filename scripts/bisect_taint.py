@@ -49,6 +49,7 @@ Exit codes / 退出码：0 = finished and the baseline reproduced / 跑完且基
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,9 @@ from i18n import tr, set_lang  # noqa: E402
 
 CONTROL = "t1_control"
 DEFAULT_QUERY = "codeql/python-queries:Security/CWE-312/CleartextStorage.ql"
+
+# v1.0.7：变体名白名单——拒绝含 "/" 或 ".." 的名字，防止落地目录逃出 workdir
+_VARIANT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 CODEQL_TIMEOUT = 1800  # 单步（建库 / 分析）超时秒数；超时重试一次，仍超时返回 124
@@ -84,13 +88,25 @@ def _run_codeql(cmd: list[str]) -> int:
     return 124
 
 
+def _assert_inside(p: Path, root: Path) -> None:
+    """硬门禁：拒绝任何在 root 之外读写/删除的操作（防路径越界写盘/删盘）。"""
+    p, root = p.resolve(), root.resolve()
+    if p != root and root not in p.parents:
+        raise ValueError(f"refusing to touch {p}: outside workdir {root}")
+
+
 def _stage(tree: Path, src_rel: Path, dst: Path, body: str | None,
            workdir: Path | None = None) -> Path:
     """把 tree 复制到 dst，可选地把 src_rel 的内容替换为 body。返回变体内的源码路径。
 
     注意：默认 workdir 可能就落在 tree 里面（``<tree>/_bisect``）。若不在复制时排除它，
     第 2 个变体会把第 1 个变体的 ``_db`` 一并拷进来，逐轮膨胀。
+
+    v1.0.7 起：dst 必须先通过 ``_assert_inside`` 门禁——即便变体名被绕过，
+    也绝不会在 workdir 之外 rmtree 或写入（对应 ClawHub Overview 的 "write or delete
+    outside the advertised work area"）。
     """
+    _assert_inside(dst, workdir or tree)
     if dst.exists():
         shutil.rmtree(dst)
 
@@ -138,11 +154,21 @@ def main(argv=None) -> int:
 
     tree = Path(args.tree).resolve()
     src_rel = Path(args.source)
+    # P0 (v1.0.7)：拒绝绝对路径或含 ".." 段的 --source，避免 (tree / src_rel) 吞掉
+    # 左操作数后越界写盘 / 读错文件
+    if src_rel.is_absolute() or ".." in src_rel.parts:
+        print(tr("err_source_not_relative", src=args.source), file=sys.stderr)
+        print(tr("how_to_fix", hint=tr("hint_source_relative")), file=sys.stderr)
+        return 2
     src_abs = (tree / src_rel).resolve()
     if not src_abs.is_file():
         print(tr("err_source_missing", src=src_abs), file=sys.stderr)
         return 2
     workdir = Path(args.workdir or (tree / "_bisect")).resolve()
+    # P0 (v1.0.7)：拒绝盘符根 / 家目录级别的工作目录，避免 rmtree 打到危险位置
+    if workdir == Path(workdir.anchor) or workdir == Path.home():
+        print(tr("err_workdir_too_broad", workdir=workdir), file=sys.stderr)
+        return 2
 
     # ── 组装变体清单：control 恒在最前 ──────────────────────────────────────
     variants: list[tuple[str, str | None]] = [(CONTROL, None)]
@@ -154,6 +180,10 @@ def main(argv=None) -> int:
             print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
             return 2
         name, pair = spec.split("=", 1)
+        if not _VARIANT_NAME_RE.match(name):
+            print(tr("err_variant_bad_name", name=name), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant_name")), file=sys.stderr)
+            return 2
         if ":" not in pair:
             print(tr("err_variant_no_colon", name=name, spec=spec), file=sys.stderr)
             print(tr("how_to_fix", hint=tr("hint_variant")), file=sys.stderr)
@@ -189,6 +219,10 @@ def main(argv=None) -> int:
             print(tr("how_to_fix", hint=tr("hint_variant_file")), file=sys.stderr)
             return 2
         name, _, path = spec.partition("=")
+        if not _VARIANT_NAME_RE.match(name):
+            print(tr("err_variant_bad_name", name=name), file=sys.stderr)
+            print(tr("how_to_fix", hint=tr("hint_variant_name")), file=sys.stderr)
+            return 2
         if not name:
             print(tr("err_variantfile_no_name", spec=spec), file=sys.stderr)
             print(tr("how_to_fix", hint=tr("hint_variant_file")), file=sys.stderr)

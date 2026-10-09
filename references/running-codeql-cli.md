@@ -18,7 +18,7 @@ The CodeQL CLI is an **optional dependency**: the prefilter and SARIF reader nee
 | ① 下载 | `gh release download …` | 是（仅这一次） | ~15 min（国内见 §5） |
 | ② 解压 + PATH | `zipfile.extractall` + `export PATH` | 否 | 秒级 |
 | ③ 验证 | `codeql --version` / `codeql resolve languages` | 否 | 秒级 |
-| ④ 最小试跑 | `codeql database create /tmp/db --language=python` | 否 | ~70 s |
+| ④ 最小试跑 | `codeql database create ./_probe_db --language=python` | 否 | ~70 s |
 | ⑤ 建库 + 跑单条查询 | `codeql database create` + `codeql database analyze --download` | 是（首次拉查询包） | 建库 ~9 min + 求值 ~30 s |
 
 只有 ① 和 ⑤ 的 `--download` 会联网；④ 完全离线，足够验证 CLI 是否装好。
@@ -103,8 +103,13 @@ codeql resolve languages    # 期望输出里含 python / expect "python" in the
 Build a minimal Python database; success proves the CLI + extractors work, **no query pack, no network**:
 
 ```bash
-codeql database create /tmp/db --language=python
-# 期望看到 "Successfully created database(s) at /tmp/db" / expect "Successfully created..."
+codeql database create ./_probe_db --language=python
+# 期望看到 "Successfully created database(s) at ./_probe_db" / expect "Successfully created..."
+#
+# 注：_probe_db 只是**一次性、可丢弃**的 CodeQL 建库产物，不是任何 agent 状态 / 记忆；
+# 它每轮都从源码重建（H5 幂等 rmtree+rebuild），绝不会被读回当作跨会话持久化的状态。
+# Note: _probe_db is a throwaway CodeQL build artifact, NOT agent state/memory; it is rebuilt from
+# source every run and is never read back as cross-session persistent state.
 ```
 
 这一步是「装好没装好」的硬验证——在信任一次真实 triage 之前先跑它。

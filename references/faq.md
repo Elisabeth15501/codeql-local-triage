@@ -95,3 +95,6 @@
 
 也就是说，**只有第 ③ 步必须装 CodeQL CLI**；前两步纯 Python 标准库，离线即可跑。
 第 ③ 步缺 `--codeql` 时脚本会自动降级为「只生成变体目录，不跑分析」，方便你先检查改动对不对。
+
+所有写盘都只发生在 `<tree>/_bisect/`（或你 `--workdir` 指定的目录）——即 `SKILL.md` 的 H5 与「能力边界」所约束的写盘面，绝不会写到仓库之外或系统目录；这与任何「跨会话持久化 agent 状态」无关。
+All writes stay under `<tree>/_bisect/` (or your `--workdir`): the write surface bounded by H5 / "Capability boundary" in `SKILL.md` — never outside the repo or a system directory, and unrelated to any cross-session persistent agent state.
